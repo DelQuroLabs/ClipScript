@@ -1,0 +1,72 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "schema_version": "1.2.0",
+ "type": "object",
+ "additionalProperties": false,
+ "required": [
+  "schema_version",
+  "waivers"
+ ],
+ "properties": {
+  "schema_version": {
+   "type": "string"
+  },
+  "waivers": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "project",
+     "gate",
+     "phase",
+     "unmet_capability",
+     "risk",
+     "compensating_control",
+     "approving_actor",
+     "approved_at",
+     "expires_at",
+     "blocks_release"
+    ],
+    "properties": {
+     "project": {
+      "type": "string"
+     },
+     "gate": {
+      "type": "string"
+     },
+     "phase": {
+      "enum": [
+       "prototype",
+       "preview",
+       "production-candidate"
+      ]
+     },
+     "unmet_capability": {
+      "type": "string"
+     },
+     "risk": {
+      "type": "string"
+     },
+     "compensating_control": {
+      "type": "string"
+     },
+     "approving_actor": {
+      "type": "string"
+     },
+     "approved_at": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "expires_at": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "blocks_release": {
+      "type": "boolean"
+     }
+    }
+   }
+  }
+ }
+}

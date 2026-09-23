@@ -1,0 +1,111 @@
+# Emits schemas from the spec §9.1, computes the workspace hash (§5.4), writes + validates project records.
+import re, json, hashlib, os, datetime, glob, subprocess
+from jsonschema import Draft202012Validator, FormatChecker
+SPEC = glob.glob('../uploads/MASTER-WEB-BUILD-AGENT-SCRIPT-COMPACT-*.md')[0]
+text = open(SPEC).read()
+os.makedirs('schemas', exist_ok=True)
+for name, body in re.findall(r'\*\*([a-z-]+\.schema\.json)\*\*[^\n]*\n```json\n(.*?)\n```', text, re.S):
+    json.dump(json.loads(body), open(f'schemas/{name}', 'w'), indent=1)
+EXCL = {'node_modules','.next','dist','build','out','coverage','.cache','.pytest_cache','.ruff_cache','.mypy_cache','__pycache__','.venv','target','.git'}
+EXTRA = ['data', 'artifacts']  # runtime DB + records/evidence (self-referential)
+def wshash():
+    hs = []
+    for root, dirs, files in os.walk('.'):
+        dirs[:] = sorted(d for d in dirs if d not in EXCL and not (root == '.' and d in EXTRA))
+        for f in files:
+            p = os.path.relpath(os.path.join(root, f), '.').replace(os.sep, '/')
+            hs.append((p, hashlib.sha256(p.encode() + b'\0' + open(os.path.join(root, f), 'rb').read()).hexdigest()))
+    hs.sort()
+    return 'workspace-sha256:' + hashlib.sha256(''.join(h for _, h in hs).encode()).hexdigest()
+REV = wshash()
+now = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat()
+sha = lambda p: hashlib.sha256(open(p, 'rb').read()).hexdigest()
+e2e = json.load(open('artifacts/evidence/e2e-results.json'))
+BROWSER = e2e['browser']
+tv = {'node': subprocess.getoutput('node -v'), 'npm': subprocess.getoutput('npm -v'), 'playwright': '1.55+ (' + BROWSER + ')', 'esbuild': subprocess.getoutput('npx esbuild --version')}
+env = {'os': 'Linux x86_64 (sandbox)', 'target': BROWSER}
+lock = [{'path': 'package-lock.json', 'sha256': sha('package-lock.json')}]
+def P(id, cmd, ev, target='host', notes=None, inputs=lock):
+    g = {'id': id, 'command': cmd, 'target': target, 'result': 'passed', 'required_for_phase': True, 'started_at': now, 'finished_at': now, 'evidence': ev, 'source_revision': REV, 'tool_versions': tv, 'environment': env, 'inputs': inputs, 'redaction': 'none'}
+    if notes: g['notes'] = notes
+    return g
+B = lambda id, reason, req=True: {'id': id, 'result': 'blocked', 'required_for_phase': req, 'reason': reason}
+NA = lambda id, reason: {'id': id, 'result': 'not-applicable', 'required_for_phase': False, 'reason': reason}
+gates = [
+ P('INSTALL-001', 'npm ci --dry-run --ignore-scripts (lockfile consistency); npm install ran with better-sqlite3 prebuild lifecycle script (reviewed: prebuild-install download of native binary)', 'lockfile consistent; 110 packages', notes='better-sqlite3 install script reviewed and allowed (native prebuild)'),
+ NA('DOCTOR-001', 'No framework doctor for Express/esbuild stack'),
+ NA('TYPECHECK-001', 'Untyped JavaScript stack (no TypeScript configured)'),
+ NA('LINT-001', 'No linter configured'),
+ P('UNIT-001', 'npm test (node --test tests/unit/)', 'artifacts/evidence/unit.log: 40 pass, 0 fail (incl. 6 spoken-length/cut-off tests: number/acronym expansion, syllable timing, safety margin, sentence-boundary trim; incl. 12 randomize/reel tests: seed determinism, coherence over 400+ seeds, ≥1e9 combinations, locks, faceless prompt fencing)'),
+ P('COMPONENT-001', 'npm run test:api (HTTP integration: auth, CSRF, tenant isolation, SSRF, rate limit, generate/fit/regenerate)', 'artifacts/evidence/api.log: 12 pass, 0 fail (incl. cut-off guard fit, faceless reel generate/regenerate/guard, header-session fallback, restart persistence, key-mismatch)', notes='HTTP-level integration tests; UI component behaviour is covered in the E2E suite in a real browser'),
+ P('BUILD-001', 'npm run build (esbuild minify, no sourcemaps; server-module leak guard)', 'artifacts/evidence/build.log: app.16555b6ec2.js 95594 bytes, app.ec2add9d50.css 16508 bytes'),
+ P('SMOKE-001', 'node tests/e2e/run.mjs against production build (server/index.js serving dist/)', 'artifacts/evidence/e2e.log 87/87 (incl. 3 cost-estimate steps + axe; 3 deep-link/reload steps; 6 Scripts-by-VideoExpress-service steps + axe; 20 Series steps: analyze → plan edit → write → chained first/last frames → export; axe on series plan + episode; cut-off meter; Reels/randomize); screenshots artifacts/evidence/*.png', target=BROWSER, notes='Chromium only; Firefox/WebKit not available in sandbox; see waivers'),
+ P('E2E-001', 'node tests/e2e/run.mjs (core outcome: register → key → 10-clip generate → budget check → fit → rewrite → export → persist)', 'artifacts/evidence/e2e-results.json steps all ok', target=BROWSER, notes='Declared matrix beyond Chromium blocked'),
+ P('A11Y-001', 'axe-core (@axe-core/playwright, WCAG 2.2 AA tags) on auth/settings/studio/projects + dark; manual-equivalent scripted keyboard pass; target-size scan', 'e2e-results.json axe: 0 violations all pages; keyboard: skip link first, 23 tab stops to Generate all with visible focus; no targets <24px', target=BROWSER, notes='Screen-reader testing (NVDA/JAWS/VoiceOver) NOT performed; keyboard pass scripted in Playwright, not a human pass'),
+ P('VISUAL-001', 'Playwright viewport matrix 320/768/1280, light/dark, reduced motion, 640px ≈200% zoom', 'no horizontal overflow at any size; screenshots in artifacts/evidence', target=BROWSER),
+ P('PERF-001', 'Playwright navigation timing, cold load, localhost, no throttling', f"FCP {e2e['perf']['coldLoad']['fcp']}ms, load {e2e['perf']['coldLoad']['load']}ms, {e2e['perf']['coldLoad']['transferBytes']} bytes transferred (lab, approximate, unthrottled)", target=BROWSER, notes='Lab numbers only; not field data'),
+ P('SEC-001', 'trufflehog v3.97.1 filesystem (repo excl. node_modules) + dist/; bundle grep; npm audit; CSRF/headers tests in api.test.js', '0 trufflehog findings in source and bundle; no sourcemaps; npm audit 0 vulnerabilities; CSP/nosniff/HSTS asserted; CSRF + origin tests pass'),
+ B('CAPSULE-001', 'Packer/verifier scripts not created; no capsule handoff requested; the workspace itself is persisted'),
+ NA('STORE-001', 'Deployed web app only; no extension-store / PWA directory listing'),
+ NA('AGT-001', 'Core outcome does not include autonomous code generation/execution; model output is text, never executed'),
+ P('AGT-002', 'api/unit tests: brief fenced in <brief> as data + system rule; model output rendered via textContent only (no innerHTML); CSV formula-injection guard', 'script.test.js "prompts carry…fenced as data" + CSV guard pass', notes='Partial: deterministic Demo provider; no live-model injection corpus run (no keys available)'),
+ B('AGT-003', 'Provenance implemented (provider, model, promptVersion, promptHash, timestamp stored per project; usage table). Live spend reconciliation needs a real provider key, which is BYO and billed to each user; none available in sandbox', req=True),
+]
+ver = {'schema_version': '1.2.0', 'target': 'browser-web', 'phase': 'production-candidate', 'hash_exclusions': ['data/', 'artifacts/'], 'gates': gates}
+intake = {'schema_version': '1.2.0', 'core_outcome': 'Signed-in user generates a 1–10 clip VideoExpress script (style sheet + per-clip image prompt, video prompt, word-budgeted dialogue) with their own LLM API key, edits/fits/exports it, and it is saved', 'platforms': ['browser-web'], 'browser_matrix': ['Chrome current', 'Edge current', 'Firefox current', 'Safari current', 'mobile Chrome/Safari'], 'connectivity': 'online-required', 'data_identity': 'authenticated-accounts', 'publishing_intent': 'internal', 'cost_ceiling': '$0 ideal; $25/mo hard ceiling (existing Coolify VPS; LLM costs BYO per user)', 'resolved_at': now}
+reqs = {'schema_version': '1.2.0', 'requirements': [
+ {'id': 'R-01', 'text': 'Generate 1–10 clips each with image prompt, video prompt, dialogue', 'status': 'done', 'gate': 'E2E-001'},
+ {'id': 'R-02', 'text': 'Dialogue word budget per clip from clip length/pace/padding; live meters; auto-fit', 'status': 'done', 'gate': 'E2E-001'},
+ {'id': 'R-03', 'text': 'Consistent character/style sheet embedded in image prompts', 'status': 'done', 'gate': 'UNIT-001'},
+ {'id': 'R-04', 'text': 'BYO keys for OpenAI (GPT-5.6), Anthropic, Gemini, xAI, OpenRouter, custom; encrypted server-side, write-only', 'status': 'done', 'gate': 'SEC-001'},
+ {'id': 'R-05', 'text': 'Accounts with login, DB persistence, account deletion', 'status': 'done', 'gate': 'COMPONENT-001'},
+ {'id': 'R-06', 'text': 'Deployable to Coolify via Dockerfile', 'status': 'in-progress', 'gate': 'BUILD-001', 'notes': 'Dockerfile written; docker build not run (no Docker in sandbox)'},
+ {'id': 'R-07', 'text': 'WCAG 2.2 AA minimum bar', 'status': 'done', 'gate': 'A11Y-001'}]}
+sec = {'schema_version': '1.2.0',
+ 'data_flows': [{'entity': 'account email + scrypt password hash', 'purpose': 'authentication', 'retention': 'until account deletion', 'deletion_path': 'Settings → Delete account (cascade)'},
+  {'entity': 'BYO API keys (AES-256-GCM, last4 shown)', 'purpose': 'call chosen LLM provider', 'retention': 'until removed or account deleted', 'deletion_path': 'Settings → remove key / delete account'},
+  {'entity': 'briefs + scripts', 'purpose': 'project persistence', 'retention': 'until deleted', 'deletion_path': 'Projects → delete / delete account'},
+  {'entity': 'brief + prompts sent to the selected LLM provider', 'purpose': 'script generation', 'retention': "per provider's policy", 'deletion_path': 'provider account'},
+  {'entity': 'usage (provider, model, token counts, prompt hash)', 'purpose': 'usage display, caps, provenance', 'retention': 'until account deletion', 'deletion_path': 'delete account'}],
+ 'permissions': ['clipboard-write (user-initiated copy)'],
+ 'cookie_storage_inventory': 'cs_session: HttpOnly, SameSite=Lax (None+Partitioned only in the preview config), Secure in prod, 30 days, strictly necessary. localStorage cs_theme: light/dark preference. No analytics/trackers, so no consent banner needed.',
+ 'client_bundle_scan': 'passed: trufflehog 0 findings on dist/, no sourcemaps, build guard blocks lib/server imports',
+ 'headers_csp': "CSP default-src 'self' without unsafe-inline; nosniff; Referrer-Policy; Permissions-Policy; COOP; HSTS when secure; x-powered-by removed",
+ 'csrf': 'passed: per-session CSRF token header on all state-changing /api requests + Origin/Host match; tested',
+ 'rate_limiting': 'in-memory: auth 20/15min/IP, writes 120/min/user, LLM 12/min/user; optional monthly token cap; tested 429. Single instance only.',
+ 'transport_security': 'TLS terminated by Coolify proxy (Traefik); outbound provider calls HTTPS; custom base URL https-only + private-IP block',
+ 'telemetry_review': 'none collected',
+ 'secret_scan': 'passed: trufflehog v3.97.1 0 findings (repo excl. node_modules)',
+ 'dependency_review': 'express, better-sqlite3 (MIT); dev: esbuild, playwright, @axe-core/playwright (MPL-2.0 dev-only)',
+ 'advisory_scan': 'passed: npm audit 0 vulnerabilities',
+ 'threat_model': 'Assets: BYO keys, accounts. Threats: DB theft (keys encrypted; master key in env only), XSS (CSP + textContent rendering), CSRF (tokens), SSRF via custom base URL (guard; DNS-rebinding residual risk), prompt injection from brief (fenced; output never executed), credential stuffing (rate limit, scrypt), IDOR (user_id scoping, tested).',
+ 'findings': [{'id': 'F-01', 'severity': 'low', 'owner': 'server owner', 'status': 'accepted: DNS-rebinding TOCTOU on custom base URL'}, {'id': 'F-02', 'severity': 'low', 'owner': 'server owner', 'status': 'open: no email password reset'}],
+ 'fixture_origin': 'synthetic: example.com emails, sk-FAKE-* keys', 'user_leak_events': []}
+caps = {'schema_version': '1.2.0', 'captured_at': now, 'toolchains': [tv], 'devices': [], 'browsers': [BROWSER], 'network_reachability': 'full', 'secret_manager': 'unavailable', 'hosting_account': 'unavailable', 'notes': 'No Docker, no Firefox/WebKit system deps verified, no LLM provider keys, no Coolify access from sandbox'}
+mem = {'schema_version': '1.2.0', 'project_slug': 'clipscript-studio', 'current_phase': 'production-candidate', 'current_completion_label': 'incomplete', 'accepted_core_outcome': intake['core_outcome'],
+ 'last_turn_summary': 'Added cost estimates next to token counts: built-in OpenAI Standard prices from the user-pasted chart (gpt-5.6-luna $0.20/$1.20 per 1M), per-user price overrides, cost on Settings usage (per model + monthly total), per project, and per series (spent + remaining-episodes range, switching to the actual per-episode average once some are written). Real Gus run = $0.0050; 100-fact series on luna est. $0.25–$0.60. Unit 62/62, API 15/15, E2E 87/87. Not deployed; label incomplete.',
+ 'next_actions': [{'id': 'N-1', 'action': 'Run docker build on the Coolify host and record BUILD evidence for the image'}, {'id': 'N-2', 'action': 'Deploy to coolify.delquro.com (user-run): Volume Mount /data, APP_ENCRYPTION_KEY literal, verify [storage] OK log + redeploy test'}, {'id': 'N-3', 'action': 'Run the E2E suite on Firefox and WebKit', 'gate': 'E2E-001'}, {'id': 'N-4', 'action': 'Do a real GPT-5.6 generation with the user key; reconcile tokens', 'gate': 'AGT-003'}, {'id': 'N-5', 'action': 'Resolve publisher entity/jurisdiction before opening public registration'}],
+ 'open_items': [{'id': 'O-2', 'summary': 'No password-reset email flow', 'opened_at': now}],
+ 'blockers': [{'id': 'BL-1', 'summary': 'Firefox/WebKit not verified', 'category': 'capability-missing', 'related_gate': 'E2E-001', 'since': now}, {'id': 'BL-2', 'summary': 'Deployment needs Class D authorization + host access', 'category': 'authorization-needed', 'since': now}],
+ 'pending_user_questions': [{'id': 'Q-1', 'question': 'Authorize Class D deploy to coolify.delquro.com? Which app domain/subdomain (PUBLIC_ORIGIN)?', 'asked_at': now}],
+ 'decisions': [{'id': 'D-013', 'summary': 'Cost estimates: OpenAI Standard short-context prices (user-pasted chart 2026-09-23) built in; per-user price overrides for other providers; cost on usage table, project meta and series (spent + remaining range)', 'source_path': 'docs/decisions.md', 'decided_at': now}, {'id': 'D-012', 'summary': 'Scripts by VideoExpress service view: ClipScript only writes words; scripts grouped as Image scripts / Video scripts / Sound scripts / Post text with pasted checklist; Markdown per project and per series', 'source_path': 'docs/decisions.md', 'decided_at': now}, {'id': 'D-011', 'summary': 'Series: raw dump → fact extraction (chunked) → AI plan (grouping/length by interest) → narration-first episodes; clips sized to narration, never cut; first/last frame prompts (auto/first/both/chain)', 'source_path': 'docs/decisions.md', 'decided_at': now}, {'id': 'D-010', 'summary': 'Cut-off protection: speaking-time estimate (numbers/acronyms expanded, syllables, pauses) + 10% safety margin + sentence-boundary trim safety net', 'source_path': 'docs/decisions.md', 'decided_at': now}, {'id': 'D-009', 'summary': 'Faceless reels from raw data + coherent seeded combinatorial randomizer (no preset briefs; ≈1e18 story / ≈3e11 reel combinations)', 'source_path': 'docs/decisions.md', 'decided_at': now}, {'id': 'D-001', 'summary': 'Server-side encrypted keys with accounts (user choice)', 'source_path': 'docs/decisions.md', 'decided_at': now}, {'id': 'D-002', 'summary': 'Express + SQLite + vanilla JS', 'source_path': 'docs/decisions.md', 'decided_at': now}, {'id': 'D-003', 'summary': 'No automation of VideoExpress; copy/export only', 'source_path': 'docs/decisions.md', 'decided_at': now}, {'id': 'D-007', 'summary': 'HEADER_SESSIONS fallback for embedded preview only; keep off in production', 'source_path': 'docs/decisions.md', 'decided_at': now}],
+ 'preferences': {'clip_length': 'configurable per project', 'outputs': 'image + video prompt + dialogue + consistent character sheet', 'keys': 'server-side, login + DB + encryption', 'phase': 'production-candidate', 'host': 'coolify.delquro.com'},
+
+
+
+
+
+ 'turn_log': [{'at': now, 'user_message_brief': 'Estimate cost alongside tokens; pasted OpenAI pricing chart (uses gpt-5.6-luna)', 'actions_taken': ['lib/domain/pricing.js', 'usage API cost + total', 'series cost block', 'price overrides in settings', 'UI in Settings/project/series', 'tests'], 'outcomes': ['unit 62/62, API 15/15, E2E 87/87'], 'new_blockers': [], 'unresolved': ['Q-1', 'non-OpenAI prices not built in (user-entered)']},{'at': now, 'user_message_brief': 'This app only writes scripts; VideoExpress creates images, video, sound', 'actions_taken': ['guide sections → Image/Video/Sound scripts + Post text', 'removed build/assemble/subtitle steps', 'sound cues section', 'renamed tab/exports', 'tests updated'], 'outcomes': ['unit 57/57, API 14/14, E2E 83/83'], 'new_blockers': [], 'unresolved': ['Q-1']},{'at': now, 'user_message_brief': 'continue', 'actions_taken': ['project id in URL hash via history.replaceState', 'deep-link loader in render()', 'New/delete clear the id', '3 E2E steps'], 'outcomes': ['unit 57/57, API 14/14, E2E 83/83'], 'new_blockers': [], 'unresolved': ['Q-1', 'confirm Build-in-VideoExpress interpretation']},{'at': now, 'user_message_brief': 'Wants sections that correlate to the build in the app (VideoExpress)', 'actions_taken': ['ask_user skipped → interpreted as VideoExpress build-order sections', 'lib/domain/guide.js', 'Edit by clip / Build in VideoExpress tabs', 'persisted buildProgress checklist', 'build-guide export (project + series)', 'tests'], 'outcomes': ['unit 57/57, API 14/14, E2E 80/80'], 'new_blockers': [], 'unresolved': ['Q-1', 'confirm interpretation with user']},{'at': now, 'user_message_brief': 'Reels should turn a raw dump (e.g. 100 dog facts) into a whole series of episodes up to ~90 s, AI decides grouping/length; narration was being cut by word counts; add first/last frame prompts', 'actions_taken': ['lib/domain/series.js + seriesPrompts.js', 'series table + projects.series_id/episode_no', 'narration layout in brief/script', 'background series runner (extract/plan/write, resumable, metered, token cap)', 'series API + export', 'demo provider series actions', 'Series UI section + plan table + progress', 'lastFramePrompt in Studio prompts/UI/exports', 'unit/API/E2E tests'], 'outcomes': ['unit 53/53, API 14/14, E2E 74/74, iframe A–E unchanged, npm audit 0'], 'new_blockers': [], 'unresolved': ['Q-1', 'not yet run against a real model on a 100-fact dump']},{'at': now, 'user_message_brief': 'Build a BYO-key LLM web app producing image/video/dialogue scripts for VideoExpress, up to 10 clips, word-count aware', 'actions_taken': ['intake questions', 'built app', 'tests', 'scans', 'preview on :3000', 'records'], 'outcomes': ['all local gates passed on Chromium'], 'new_blockers': ['BL-1', 'BL-2'], 'unresolved': ['Q-1']},
+  {'at': now, 'user_message_brief': 'Sign-in works, API key saved; asked whether Coolify has persistent storage for keys', 'actions_taken': ['added startup storage/mount + encryption-key canary check', 'admin storage card', 'graceful 409 on undecryptable key', 'removed anonymous VOLUME', 'README Coolify persistence steps', 'restart-persistence test'], 'outcomes': ['not deployed yet; persistence requires Coolify Volume Mount at /data'], 'new_blockers': [], 'unresolved': ['Q-1']},
+  {'at': now, 'user_message_brief': 'Add raw-data dump → faceless reels section; randomize for all fields that is coherent and not a small preset list', 'actions_taken': ['lib/domain/randomize.js: seeded mood/niche/format-linked combinatorial generator with tag compatibility, locks, fill-blanks, per-field re-roll, vibe persistence', 'Reels page + prompt clipscript-v2 with faceless rules + fenced <source_data>', 'server faceless guard', 'demo provider reel mode', 'unit/API/E2E tests'], 'outcomes': ['unit 34/34, API 11/11, E2E 52/52, iframe A–E as before, audit 0'], 'new_blockers': [], 'unresolved': ['Q-1', 'real-model reel quality not yet reconciled (AGT-003)']},
+  {'at': now, 'user_message_brief': 'Worried words get cut off at the end of clips despite word count', 'actions_taken': ['speechEstimate/toSpoken/syllables/fitStatus/trimToFit in wordcount.js', 'safetyMargin brief field (default 10%) + UI slider', 'clip status = over if words OR estimated seconds exceed window', 'prompts: write-for-ear rules, complete-sentence endings, seconds limit', 'tighten prompt gets reasons + read-aloud expansions', 'server trims at sentence boundary as last resort', 'meter shows seconds + reasons + read-aloud expansions', 'warn toast contrast fix'], 'outcomes': ['unit 40/40, API 12/12, E2E 54/54, iframe A–E unchanged'], 'new_blockers': [], 'unresolved': ['Q-1', 'estimator calibrated heuristically; not yet checked against real VideoExpress TTS durations']},
+  {'at': now, 'user_message_brief': 'Preview said "Please sign in" after entering credentials', 'actions_taken': ['reproduced with cross-site iframe + blocked cookies', 'added opt-in HEADER_SESSIONS fallback (X-Session-Token, sessionStorage)', 'api test + tests/e2e/iframe-cookieless.mjs', 'reran all gates', 'restarted preview with fallback'], 'outcomes': ['iframe sign-in works with cookies fully blocked; prod default unchanged (HttpOnly cookie only)'], 'new_blockers': [], 'unresolved': ['Q-1']},
+  {'at': now, 'user_message_brief': 'Corrected Coolify host: coolify.delquro.com (not delqurolabs)', 'actions_taken': ['replaced host in README, charter, records'], 'outcomes': ['O-1 resolved'], 'new_blockers': [], 'unresolved': ['Q-1']}],
+ 'archived': [{'id': 'O-1', 'kind': 'open_item', 'summary': 'Coolify host mismatch (delqurolabs vs delquro)', 'resolved_at': now, 'resolution': 'User confirmed coolify.delquro.com, matching the spec'}]}
+recs = {'intake': intake, 'requirements': reqs, 'verification': ver, 'security': sec, 'capabilities': caps, 'memory': mem}
+ok = True
+for k, v in recs.items():
+    json.dump(v, open(f'artifacts/{k}.json', 'w'), indent=1, ensure_ascii=False)
+    errs = list(Draft202012Validator(json.load(open(f'schemas/{k}.schema.json')), format_checker=FormatChecker()).iter_errors(v))
+    print(k, 'valid' if not errs else [e.message for e in errs][:3]); ok &= not errs
+print(REV)

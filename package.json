@@ -1,0 +1,25 @@
+{
+  "name": "clipscript-studio",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Write image, video and dialogue scripts for VideoExpress clips with your own LLM API keys.",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "start": "node server/index.js",
+    "dev": "node scripts/build.mjs && NODE_ENV=development node server/index.js",
+    "test": "node --test tests/unit/",
+    "test:api": "node --test tests/api.test.js",
+    "test:e2e": "node tests/e2e/run.mjs"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.4.1",
+    "express": "^4.21.2"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.10.2",
+    "esbuild": "^0.25.10",
+    "playwright": "^1.55.0"
+  }
+}

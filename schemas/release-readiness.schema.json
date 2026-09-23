@@ -1,0 +1,81 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "schema_version": "1.2.0",
+ "type": "object",
+ "additionalProperties": false,
+ "required": [
+  "schema_version",
+  "label"
+ ],
+ "properties": {
+  "schema_version": {
+   "type": "string"
+  },
+  "label": {
+   "enum": [
+    "phase-complete",
+    "phase-complete-with-waiver",
+    "incomplete",
+    "release-ready"
+   ]
+  },
+  "artifact_identity": {
+   "type": "string"
+  },
+  "version_build": {
+   "type": "string"
+  },
+  "signing_custody": {
+   "type": "string"
+  },
+  "permissions_privacy": {
+   "type": "string"
+  },
+  "dependency_license_review": {
+   "type": "string"
+  },
+  "rollback_plan": {
+   "type": "string"
+  },
+  "migration_compatibility": {
+   "type": "string"
+  },
+  "monitoring": {
+   "type": "string"
+  },
+  "release_notes": {
+   "type": "string"
+  },
+  "post_release_owner": {
+   "type": "string"
+  },
+  "compensating_controls": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "gate",
+     "control",
+     "actor",
+     "date"
+    ],
+    "properties": {
+     "gate": {
+      "type": "string"
+     },
+     "control": {
+      "type": "string"
+     },
+     "actor": {
+      "type": "string"
+     },
+     "date": {
+      "type": "string",
+      "format": "date"
+     }
+    }
+   }
+  }
+ }
+}

@@ -1,0 +1,74 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "schema_version": "1.2.0",
+ "type": "object",
+ "additionalProperties": false,
+ "required": [
+  "schema_version",
+  "core_outcome",
+  "platforms",
+  "connectivity",
+  "data_identity",
+  "publishing_intent"
+ ],
+ "properties": {
+  "schema_version": {
+   "type": "string"
+  },
+  "core_outcome": {
+   "type": "string"
+  },
+  "platforms": {
+   "type": "array",
+   "items": {
+    "enum": [
+     "browser-web",
+     "pwa",
+     "browser-extension"
+    ]
+   },
+   "minItems": 1
+  },
+  "browser_matrix": {
+   "type": "array",
+   "items": {
+    "type": "string"
+   }
+  },
+  "connectivity": {
+   "enum": [
+    "offline-capable",
+    "online-first",
+    "online-required"
+   ]
+  },
+  "data_identity": {
+   "enum": [
+    "local-only",
+    "anonymous-remote",
+    "authenticated-accounts"
+   ]
+  },
+  "publishing_intent": {
+   "enum": [
+    "local-preview",
+    "internal",
+    "public-web",
+    "extension-store"
+   ]
+  },
+  "publisher_entity": {
+   "type": "string"
+  },
+  "publisher_jurisdiction": {
+   "type": "string"
+  },
+  "cost_ceiling": {
+   "type": "string"
+  },
+  "resolved_at": {
+   "type": "string",
+   "format": "date-time"
+  }
+ }
+}

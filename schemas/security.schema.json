@@ -1,0 +1,121 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "schema_version": "1.2.0",
+ "type": "object",
+ "additionalProperties": false,
+ "required": [
+  "schema_version",
+  "data_flows",
+  "permissions"
+ ],
+ "properties": {
+  "schema_version": {
+   "type": "string"
+  },
+  "data_flows": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "entity",
+     "purpose"
+    ],
+    "properties": {
+     "entity": {
+      "type": "string"
+     },
+     "purpose": {
+      "type": "string"
+     },
+     "retention": {
+      "type": "string"
+     },
+     "deletion_path": {
+      "type": "string"
+     }
+    }
+   }
+  },
+  "permissions": {
+   "type": "array",
+   "items": {
+    "type": "string"
+   }
+  },
+  "cookie_storage_inventory": {
+   "type": "string"
+  },
+  "client_bundle_scan": {
+   "type": "string",
+   "description": "result / blocked / not-applicable + reason"
+  },
+  "headers_csp": {
+   "type": "string"
+  },
+  "csrf": {
+   "type": "string",
+   "description": "result / blocked / not-applicable + reason; required for authenticated products at production-candidate"
+  },
+  "rate_limiting": {
+   "type": "string",
+   "description": "result / blocked / not-applicable + reason; required for public networked products at production-candidate"
+  },
+  "transport_security": {
+   "type": "string"
+  },
+  "telemetry_review": {
+   "type": "string"
+  },
+  "secret_scan": {
+   "type": "string",
+   "description": "result / blocked / not-applicable + reason"
+  },
+  "dependency_review": {
+   "type": "string"
+  },
+  "advisory_scan": {
+   "type": "string",
+   "description": "result / blocked / not-applicable + reason"
+  },
+  "threat_model": {
+   "type": "string"
+  },
+  "findings": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "id",
+     "severity",
+     "status"
+    ],
+    "properties": {
+     "id": {
+      "type": "string"
+     },
+     "severity": {
+      "type": "string"
+     },
+     "owner": {
+      "type": "string"
+     },
+     "status": {
+      "type": "string"
+     }
+    }
+   }
+  },
+  "fixture_origin": {
+   "type": "string"
+  },
+  "user_leak_events": {
+   "type": "array",
+   "items": {
+    "type": "string"
+   },
+   "description": "Log of POL-USERLEAK-031 warnings raised during the project; values are short descriptors, not the leaked content"
+  }
+ }
+}

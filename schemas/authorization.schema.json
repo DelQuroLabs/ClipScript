@@ -1,0 +1,71 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "schema_version": "1.2.0",
+ "type": "object",
+ "additionalProperties": false,
+ "required": [
+  "schema_version",
+  "class",
+  "action",
+  "scope",
+  "authorized_at",
+  "expires_at"
+ ],
+ "properties": {
+  "schema_version": {
+   "type": "string"
+  },
+  "class": {
+   "enum": [
+    "A",
+    "B",
+    "C",
+    "D"
+   ]
+  },
+  "action": {
+   "type": "string"
+  },
+  "scope": {
+   "type": "string"
+  },
+  "cost": {
+   "type": "string"
+  },
+  "impact": {
+   "type": "string"
+  },
+  "authorized_at": {
+   "type": "string",
+   "format": "date-time"
+  },
+  "expires_at": {
+   "type": "string",
+   "format": "date-time"
+  },
+  "actor": {
+   "type": "string"
+  }
+ },
+ "allOf": [
+  {
+   "if": {
+    "properties": {
+     "class": {
+      "const": "D"
+     }
+    },
+    "required": [
+     "class"
+    ]
+   },
+   "then": {
+    "required": [
+     "cost",
+     "impact",
+     "actor"
+    ]
+   }
+  }
+ ]
+}

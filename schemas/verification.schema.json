@@ -1,0 +1,179 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "schema_version": "1.2.0",
+ "type": "object",
+ "additionalProperties": false,
+ "required": [
+  "schema_version",
+  "gates"
+ ],
+ "properties": {
+  "schema_version": {
+   "type": "string"
+  },
+  "target": {
+   "type": "string"
+  },
+  "phase": {
+   "enum": [
+    "prototype",
+    "preview",
+    "production-candidate"
+   ]
+  },
+  "hash_exclusions": {
+   "type": "array",
+   "items": {
+    "type": "string"
+   }
+  },
+  "gates": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "id",
+     "result"
+    ],
+    "allOf": [
+     {
+      "if": {
+       "properties": {
+        "result": {
+         "enum": [
+          "passed",
+          "failed"
+         ]
+        }
+       },
+       "required": [
+        "result"
+       ]
+      },
+      "then": {
+       "required": [
+        "started_at",
+        "finished_at",
+        "evidence",
+        "source_revision"
+       ]
+      }
+     },
+     {
+      "if": {
+       "properties": {
+        "result": {
+         "const": "blocked"
+        }
+       },
+       "required": [
+        "result"
+       ]
+      },
+      "then": {
+       "required": [
+        "reason"
+       ]
+      }
+     },
+     {
+      "if": {
+       "properties": {
+        "result": {
+         "const": "not-applicable"
+        }
+       },
+       "required": [
+        "result"
+       ]
+      },
+      "then": {
+       "required": [
+        "reason"
+       ]
+      }
+     }
+    ],
+    "properties": {
+     "id": {
+      "type": "string",
+      "pattern": "^[A-Z0-9]+-[0-9]{3}$"
+     },
+     "command": {
+      "type": "string"
+     },
+     "target": {
+      "type": "string"
+     },
+     "result": {
+      "enum": [
+       "passed",
+       "failed",
+       "blocked",
+       "not-run",
+       "not-applicable"
+      ]
+     },
+     "required_for_phase": {
+      "type": "boolean"
+     },
+     "started_at": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "finished_at": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "evidence": {
+      "type": "string"
+     },
+     "source_revision": {
+      "type": "string",
+      "pattern": "^workspace-sha256:[0-9a-f]{64}$"
+     },
+     "reason": {
+      "type": "string"
+     },
+     "tool_versions": {
+      "type": "object"
+     },
+     "environment": {
+      "type": "object"
+     },
+     "inputs": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "additionalProperties": false,
+       "required": [
+        "path",
+        "sha256"
+       ],
+       "properties": {
+        "path": {
+         "type": "string"
+        },
+        "sha256": {
+         "type": "string",
+         "pattern": "^[0-9a-f]{64}$"
+        }
+       }
+      }
+     },
+     "redaction": {
+      "enum": [
+       "none",
+       "partial",
+       "full"
+      ]
+     },
+     "notes": {
+      "type": "string"
+     }
+    }
+   }
+  }
+ }
+}

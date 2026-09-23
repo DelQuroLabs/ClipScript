@@ -1,0 +1,282 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "schema_version": "1.2.0",
+ "type": "object",
+ "additionalProperties": false,
+ "required": [
+  "schema_version",
+  "current_phase",
+  "last_turn_summary",
+  "next_actions",
+  "turn_log"
+ ],
+ "properties": {
+  "schema_version": {
+   "type": "string"
+  },
+  "project_slug": {
+   "type": "string"
+  },
+  "current_phase": {
+   "enum": [
+    "unstarted",
+    "prototype",
+    "preview",
+    "production-candidate"
+   ]
+  },
+  "current_completion_label": {
+   "enum": [
+    "phase-complete",
+    "phase-complete-with-waiver",
+    "incomplete",
+    "release-ready",
+    "not-started"
+   ]
+  },
+  "accepted_core_outcome": {
+   "type": "string"
+  },
+  "last_turn_summary": {
+   "type": [
+    "string",
+    "null"
+   ],
+   "description": "One-paragraph summary a freshly loaded agent can read in <30 seconds."
+  },
+  "next_actions": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "id",
+     "action"
+    ],
+    "properties": {
+     "id": {
+      "type": "string"
+     },
+     "action": {
+      "type": "string"
+     },
+     "depends_on": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "gate": {
+      "type": "string"
+     }
+    }
+   }
+  },
+  "open_items": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "id",
+     "summary"
+    ],
+    "properties": {
+     "id": {
+      "type": "string"
+     },
+     "summary": {
+      "type": "string"
+     },
+     "opened_at": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "notes": {
+      "type": "string"
+     }
+    }
+   }
+  },
+  "blockers": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "id",
+     "summary",
+     "category"
+    ],
+    "properties": {
+     "id": {
+      "type": "string"
+     },
+     "summary": {
+      "type": "string"
+     },
+     "category": {
+      "enum": [
+       "capability-missing",
+       "waiting-for-user",
+       "authorization-needed",
+       "failing-gate",
+       "conflict",
+       "other"
+      ]
+     },
+     "related_gate": {
+      "type": "string"
+     },
+     "since": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   }
+  },
+  "pending_user_questions": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "id",
+     "question"
+    ],
+    "properties": {
+     "id": {
+      "type": "string"
+     },
+     "question": {
+      "type": "string"
+     },
+     "asked_at": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "context": {
+      "type": "string"
+     }
+    }
+   }
+  },
+  "decisions": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "id",
+     "summary"
+    ],
+    "properties": {
+     "id": {
+      "type": "string"
+     },
+     "summary": {
+      "type": "string"
+     },
+     "source_path": {
+      "type": "string",
+      "description": "Path to charter/ADR/decision log, if any."
+     },
+     "decided_at": {
+      "type": "string",
+      "format": "date-time"
+     }
+    }
+   }
+  },
+  "preferences": {
+   "type": "object",
+   "additionalProperties": {
+    "type": "string"
+   },
+   "description": "User-stated durable preferences (tooling, style, workflows). Plain string values; no secrets."
+  },
+  "turn_log": {
+   "type": "array",
+   "maxItems": 200,
+   "description": "Per-turn brief summaries; trim from the head when exceeding 200 entries.",
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "at",
+     "actions_taken"
+    ],
+    "properties": {
+     "at": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "user_message_brief": {
+      "type": "string"
+     },
+     "actions_taken": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "outcomes": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "new_blockers": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "unresolved": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     }
+    }
+   }
+  },
+  "archived": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "id",
+     "kind",
+     "summary",
+     "resolved_at"
+    ],
+    "properties": {
+     "id": {
+      "type": "string"
+     },
+     "kind": {
+      "enum": [
+       "open_item",
+       "blocker",
+       "question",
+       "decision-superseded",
+       "preference-revoked"
+      ]
+     },
+     "summary": {
+      "type": "string"
+     },
+     "resolved_at": {
+      "type": "string",
+      "format": "date-time"
+     },
+     "resolution": {
+      "type": "string"
+     }
+    }
+   }
+  }
+ }
+}
