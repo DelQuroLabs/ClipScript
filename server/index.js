@@ -16,6 +16,9 @@ if (st.persistentMount === false && process.env.NODE_ENV === 'production') {
 } else if (st.persistentMount) {
   console.log(`[storage] OK: ${st.dataDir} is a mounted volume (persistent across redeploys)`);
 }
+if (st.encryptionKeySource === 'generated') console.log(`[storage] APP_ENCRYPTION_KEY not set: created a new random key in ${st.dataDir}/.app-encryption-key (kept on the volume, reused on restarts).`);
+else if (st.encryptionKeySource === 'file') console.log(`[storage] Using the saved encryption key from ${st.dataDir}/.app-encryption-key`);
+else console.log('[storage] Using APP_ENCRYPTION_KEY from the environment');
 if (st.encryptionKey === 'mismatch') {
   console.error('[storage] WARNING: APP_ENCRYPTION_KEY does not match the key that encrypted the saved API keys. Users must re-enter keys, or restore the original APP_ENCRYPTION_KEY.');
 }

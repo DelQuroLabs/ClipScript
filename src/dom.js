@@ -35,6 +35,7 @@ const ICONS = {
   trash: 'M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13',
   gear: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6a7 7 0 0 0 0 2.4l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2z',
   folder: 'M3 6h6l2 2h10v11H3z',
+  x: 'M6 6l12 12M18 6L6 18',
   layers: 'M12 3l9 5-9 5-9-5zM3 13l9 5 9-5M3 17l9 5 9-5',
   plus: 'M12 5v14M5 12h14',
   scissors: 'M6 6m-3 0a3 3 0 1 0 6 0 3 3 0 1 0-6 0M6 18m-3 0a3 3 0 1 0 6 0 3 3 0 1 0-6 0M8.5 7.5L20 18M8.5 16.5L20 6',
@@ -68,14 +69,48 @@ export function toast(msg, kind = 'info') {
   clearTimeout(toastTimer); toastTimer = setTimeout(() => { el.hidden = true; }, 3200);
 }
 
-export async function copyText(text, label = 'Copied') {
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch {
-    const ta = h('textarea', { class: 'sr-only', 'aria-hidden': 'true' }); ta.value = text; document.body.append(ta); ta.select();
-    try { document.execCommand('copy'); } finally { ta.remove(); }
+/** Copy text. Returns true only if the browser really copied it; the toast says so honestly. */
+export async function copyText(text, label = 'Copied', { quiet = false } = {}) {
+  let ok = false;
+  try { await navigator.clipboard.writeText(text); ok = true; } catch { /* fall back below */ }
+  if (!ok) {
+    const ta = h('textarea', { class: 'offscreen', 'aria-hidden': 'true', readonly: true }); ta.value = text; document.body.append(ta);
+    ta.focus(); ta.select(); ta.setSelectionRange(0, text.length);
+    try { ok = document.execCommand('copy'); } catch { ok = false; } finally { ta.remove(); }
   }
-  toast(label, 'ok');
+  if (!quiet) toast(ok ? label : 'Your browser blocked copying. Select the text and press Ctrl+C (⌘C on Mac).', ok ? 'ok' : 'warn');
+  return ok;
+}
+
+/**
+ * A window showing the full text with Copy / Download / Select all.
+ * Always works: even if the browser blocks clipboard and downloads, the text is visible and selectable.
+ */
+export function textDialog({ title, text, filename, type = 'text/markdown', note = '' }) {
+  document.getElementById('text-dialog')?.remove();
+  const ta = h('textarea', { id: 'text-dialog-body', readonly: true, rows: 18, spellcheck: 'false', 'aria-label': `${title} text` });
+  ta.value = text;
+  const status = h('p', { class: 'hint', id: 'text-dialog-status', 'aria-live': 'polite' }, note);
+  const close = () => { dlg.close(); dlg.remove(); };
+  const dlg = h('dialog', { id: 'text-dialog', class: 'text-dialog', 'aria-labelledby': 'text-dialog-h' },
+    h('div', { class: 'td-head' }, h('h2', { id: 'text-dialog-h' }, title),
+      h('button', { class: 'btn ghost icon-only', type: 'button', 'aria-label': 'Close', onClick: close }, icon('x'))),
+    h('p', { class: 'hint' }, `${text.length.toLocaleString()} characters · ${text.split('\n').length.toLocaleString()} lines`),
+    ta, status,
+    h('div', { class: 'toolbar' },
+      h('button', { class: 'btn primary', type: 'button', id: 'text-dialog-copy', onClick: async () => {
+        const ok = await copyText(text, `${title} copied`, { quiet: true });
+        if (ok) { status.textContent = 'Copied to your clipboard. Paste it anywhere.'; toast(`${title} copied`, 'ok'); }
+        else { ta.focus(); ta.select(); status.textContent = 'Your browser blocked copying, so the text is selected. Press Ctrl+C (⌘C on Mac).'; }
+      } }, icon('copy'), 'Copy all'),
+      filename ? h('button', { class: 'btn', type: 'button', id: 'text-dialog-download', onClick: () => { download(filename, text, type); status.textContent = `Downloading ${filename}. If nothing happens, your browser blocked it: use Copy all instead.`; } }, icon('download'), 'Download') : null,
+      h('button', { class: 'btn ghost', type: 'button', onClick: () => { ta.focus(); ta.select(); } }, 'Select all'),
+      h('button', { class: 'btn ghost', type: 'button', onClick: close }, 'Close')));
+  dlg.addEventListener('cancel', (e) => { e.preventDefault(); close(); });
+  document.body.append(dlg);
+  dlg.showModal();
+  document.getElementById('text-dialog-copy').focus();
+  return dlg;
 }
 
 export function download(filename, text, type = 'text/plain') {

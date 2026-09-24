@@ -285,6 +285,26 @@ try {
     step('series: export buttons enabled', await page.locator('#series-csv').isEnabled() && await page.locator('#series-md').isEnabled());
     const dl = page.waitForEvent('download'); await page.locator('#series-csv').click(); const file = await dl;
     step('series: CSV export downloads', /\.csv$/.test(file.suggestedFilename()), file.suggestedFilename());
+    // Whole-series Markdown: copy, download, view
+    await page.waitForTimeout(400); // prefetch
+    await page.locator('#series-md-copy').click();
+    await page.locator('#toast').filter({ hasText: /copied/ }).waitFor({ timeout: 5000 });
+    const clip = await page.evaluate(() => navigator.clipboard.readText());
+    const epCount = (clip.match(/^# Episode \d+:/gm) || []).length;
+    step('series: Copy puts the WHOLE series Markdown on the clipboard', epCount === written && /\*\*First frame:\*\*/.test(clip), `${epCount} episodes, ${clip.length} chars`);
+    const dl2 = page.waitForEvent('download'); await page.locator('#series-md').click(); const f2 = await dl2;
+    const mdText = fs.readFileSync(await f2.path(), 'utf8');
+    step('series: Markdown download contains every episode', /\.md$/.test(f2.suggestedFilename()) && (mdText.match(/^# Episode \d+:/gm) || []).length === written, f2.suggestedFilename());
+    await page.locator('#series-guide-copy').click();
+    await page.locator('#toast').filter({ hasText: /scripts by service copied/i }).waitFor({ timeout: 5000 });
+    const g = await page.evaluate(() => navigator.clipboard.readText());
+    step('series: Copy scripts-by-service for the whole series', (g.match(/^# Episode \d+:/gm) || []).length === written && /Image scripts/.test(g));
+    await page.locator('#series-md-view').click();
+    await page.locator('#text-dialog').waitFor();
+    step('series: View opens the full text in a window with Copy/Download', (await page.locator('#text-dialog-body').inputValue()).length === clip.length && await vis(page.locator('#text-dialog-copy')) && await vis(page.locator('#text-dialog-download')));
+    results.axe.exportDialog = (await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']).analyze()).violations;
+    await page.keyboard.press('Escape');
+    step('series: Escape closes the window', await page.locator('#text-dialog').count() === 0);
     await page.locator('#ep-open-1').click();
     await page.locator('article.clip').first().waitFor({ timeout: 8000 });
     step('series: episode opens as a project with a link back', await vis(page.getByRole('link', { name: /Series · episode 1/ })));

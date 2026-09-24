@@ -1,6 +1,6 @@
 // Series: raw data dump → AI analysis & plan → many narration-first episodes (each saved as a project).
 import { api, apiText } from './api.js';
-import { h, clear, icon, toast, download, slug } from './dom.js';
+import { h, clear, icon, toast, download, slug, copyText, textDialog } from './dom.js';
 import { FRAME_MODES, FORMATS, SERIES_LIMITS, defaultSeriesOptions } from '../lib/domain/series.js';
 import { ASPECT_RATIOS } from '../lib/domain/project.js';
 import { formatUsd, formatRange, estimateAnalyzeTokens, priceRange } from '../lib/domain/pricing.js';
@@ -113,8 +113,11 @@ function detailView(ctx, id) {
   let data = null, saveT = null, edits = new Map();
   const load = async (quiet) => {
     try {
+      const prevCount = data?.episodes?.length, prevUpd = data?.series?.updatedAt;
       data = await api(`/api/series/${id}`);
+      if (prevCount !== data.episodes.length || prevUpd !== data.series.updatedAt) for (const k of Object.keys(cache)) delete cache[k];
       draw();
+      if (data.episodes.length && !data.running) prefetch();
       const live = data.running || data.series.status === 'analyzing' || data.series.status === 'writing';
       stopPoll();
       if (live && location.hash.startsWith(`#/series/${id}`)) poll = setTimeout(() => load(true), 1500);
@@ -145,9 +148,26 @@ function detailView(ctx, id) {
     try { await flushEdits(); await api(`/api/series/${id}/${path}`, { method: 'POST', body: body || {} }); if (msg) toast(msg, 'ok'); await load(); }
     catch (e) { toast(e.message, 'error'); }
   };
-  const exportAs = async (fmt) => {
-    try { const t = await apiText(`/api/series/${id}/export?format=${fmt}`); download(`${slug(data.series.title)}${fmt === 'guide' ? '-scripts-by-service' : ''}.${fmt === 'csv' ? 'csv' : 'md'}`, t, fmt === 'csv' ? 'text/csv' : 'text/markdown'); }
-    catch (e) { toast(e.message, 'error'); }
+  // Exports are fetched once and cached per format, so Copy/Download run straight from the click (browsers
+  // only allow clipboard + downloads during a click; an await before them can get them silently blocked).
+  const cache = {};
+  const EXPORTS = {
+    md: { title: 'Whole series (Markdown)', ext: 'md', type: 'text/markdown', suffix: '' },
+    guide: { title: 'Whole series: scripts by service', ext: 'md', type: 'text/markdown', suffix: '-scripts-by-service' },
+    csv: { title: 'Whole series (CSV)', ext: 'csv', type: 'text/csv', suffix: '' },
+  };
+  const fileFor = (fmt) => `${slug(data.series.title)}${EXPORTS[fmt].suffix}.${EXPORTS[fmt].ext}`;
+  const getExport = async (fmt) => (cache[fmt] ??= await apiText(`/api/series/${id}/export?format=${fmt}`));
+  const prefetch = () => { for (const f of ['md', 'guide']) getExport(f).catch(() => { delete cache[f]; }); };
+  const exportAs = async (fmt, how) => {
+    const had = cache[fmt] != null;
+    let t;
+    try { t = await getExport(fmt); } catch (e) { delete cache[fmt]; toast(e.message, 'error'); return; }
+    const x = EXPORTS[fmt];
+    if (how === 'copy' && had) { const ok = await copyText(t, `${x.title} copied (${data.episodes.length} episodes)`, { quiet: true }); if (ok) { toast(`${x.title} copied: ${data.episodes.length} episodes`, 'ok'); return; } }
+    else if (how === 'download') { download(fileFor(fmt), t, x.type); toast(`Downloading ${fileFor(fmt)}: ${data.episodes.length} episodes`, 'ok'); return; }
+    // Not cached yet (the click was spent waiting) or the browser blocked it: show the text with fresh buttons.
+    textDialog({ title: x.title, text: t, filename: fileFor(fmt), type: x.type, note: how === 'copy' && had ? 'Your browser blocked copying. Use Copy all below or select the text.' : '' });
   };
 
   function draw() {
@@ -181,9 +201,14 @@ function detailView(ctx, id) {
         live && s.status === 'writing' ? h('button', { class: 'btn warn', type: 'button', id: 'series-pause', onClick: () => act('pause', null, 'Pausing after the current episode…') }, 'Pause')
           : h('button', { class: 'btn primary', type: 'button', id: 'series-write', onClick: () => act('write', null, 'Writing started. You can leave this page; it keeps going.') }, icon('spark'), h('span', null, 'Write')),
         !live && st?.failed ? h('button', { class: 'btn', type: 'button', id: 'series-retry', onClick: () => act('write', { episodes: plan.episodes.filter((e) => e.status === 'failed').map((e) => e.no) }) }, icon('refresh'), `Retry ${st.failed} failed`) : null,
-        h('button', { class: 'btn', type: 'button', id: 'series-md', disabled: !episodes.length, onClick: () => exportAs('md') }, icon('download'), 'All episodes (Markdown)'),
-        h('button', { class: 'btn', type: 'button', id: 'series-guide', disabled: !episodes.length, onClick: () => exportAs('guide') }, icon('download'), 'Scripts by service'),
-        h('button', { class: 'btn', type: 'button', id: 'series-csv', disabled: !episodes.length, onClick: () => exportAs('csv') }, icon('download'), 'All episodes (CSV)'),
+        h('div', { class: 'export-group', role: 'group', 'aria-labelledby': 'export-md-l' }, h('span', { class: 'eg-label', id: 'export-md-l' }, 'Whole series · Markdown'),
+          h('button', { class: 'btn sm', type: 'button', id: 'series-md-copy', disabled: !episodes.length, onClick: () => exportAs('md', 'copy') }, icon('copy'), 'Copy'),
+          h('button', { class: 'btn sm', type: 'button', id: 'series-md', disabled: !episodes.length, onClick: () => exportAs('md', 'download') }, icon('download'), 'Download'),
+          h('button', { class: 'btn sm ghost', type: 'button', id: 'series-md-view', disabled: !episodes.length, onClick: () => exportAs('md', 'view') }, 'View')),
+        h('div', { class: 'export-group', role: 'group', 'aria-labelledby': 'export-guide-l' }, h('span', { class: 'eg-label', id: 'export-guide-l' }, 'Scripts by service'),
+          h('button', { class: 'btn sm', type: 'button', id: 'series-guide-copy', disabled: !episodes.length, onClick: () => exportAs('guide', 'copy') }, icon('copy'), 'Copy'),
+          h('button', { class: 'btn sm', type: 'button', id: 'series-guide', disabled: !episodes.length, onClick: () => exportAs('guide', 'download') }, icon('download'), 'Download')),
+        h('button', { class: 'btn sm', type: 'button', id: 'series-csv', disabled: !episodes.length, onClick: () => exportAs('csv', 'download') }, icon('download'), 'CSV'),
         h('button', { class: 'btn ghost', type: 'button', 'aria-label': 'Delete series', onClick: async () => {
           if (!confirm(`Delete "${s.title}" and its ${episodes.length} episode projects? This cannot be undone.`)) return;
           try { await api(`/api/series/${id}`, { method: 'DELETE' }); toast('Series deleted', 'ok'); ctx.go('series'); } catch (e) { toast(e.message, 'error'); }

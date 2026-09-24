@@ -1,14 +1,14 @@
 # Coolify: New Resource → your GitHub repo → Build Pack "Docker Compose".
-# Coolify generates the encryption key (SERVICE_REALBASE64_64_…) and the web address (SERVICE_URL_…_3000) for you.
-# Both are kept between deployments. NEVER change or delete APP_ENCRYPTION_KEY after the first deploy.
+# Nothing to type except the domain (Configuration → General → Domains: https://your.domain:3000).
+# APP_ENCRYPTION_KEY is optional: if empty, the app creates one on the /data volume and reuses it forever.
+# If you ever DO set it, set it before saving any API keys, and never change it afterwards.
 services:
   clipscript:
     build: .
     restart: unless-stopped
     environment:
-      - SERVICE_URL_CLIPSCRIPT_3000
-      - APP_ENCRYPTION_KEY=${SERVICE_REALBASE64_64_CLIPSCRIPT}
-      - PUBLIC_ORIGIN=${SERVICE_URL_CLIPSCRIPT_3000}
+      - APP_ENCRYPTION_KEY=${APP_ENCRYPTION_KEY:-}
+      - PUBLIC_ORIGIN=${PUBLIC_ORIGIN:-}
       - REGISTRATION=${REGISTRATION:-first-user}
       - MONTHLY_TOKEN_CAP_PER_USER=${MONTHLY_TOKEN_CAP_PER_USER:-0}
       - NODE_ENV=production

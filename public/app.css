@@ -296,3 +296,11 @@ table.timeline td { font-size: .86rem; }
 .price-list li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .price-form { align-items: end; }
 .tbl tfoot th { text-align: right; }
+.offscreen { position: fixed; left: -9999px; top: 0; width: 1px; height: 1px; opacity: 0; }
+.export-group { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; border: 1px solid var(--border); border-radius: 10px; padding: 4px 6px 4px 10px; }
+.eg-label { font-size: .8rem; font-weight: 700; color: var(--muted); }
+dialog.text-dialog { width: min(900px, calc(100vw - 24px)); max-height: calc(100vh - 24px); border: 1px solid var(--border); border-radius: 14px; background: var(--surface); color: var(--text); padding: 18px; }
+dialog.text-dialog::backdrop { background: rgb(0 0 0 / .45); }
+.td-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.td-head h2 { margin: 0; font-size: 1.15rem; }
+#text-dialog-body { width: 100%; font: .85rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; min-height: 40vh; margin-top: 8px; }
