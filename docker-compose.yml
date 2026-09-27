@@ -9,7 +9,7 @@ services:
     environment:
       - APP_ENCRYPTION_KEY=${APP_ENCRYPTION_KEY:-}
       - PUBLIC_ORIGIN=${PUBLIC_ORIGIN:-}
-      - REGISTRATION=${REGISTRATION:-first-user}
+      - REGISTRATION=first-user   # fixed: only the first account can sign up (you, the admin)
       - MONTHLY_TOKEN_CAP_PER_USER=${MONTHLY_TOKEN_CAP_PER_USER:-0}
       - NODE_ENV=production
       - COOKIE_SECURE=true

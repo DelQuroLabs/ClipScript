@@ -235,6 +235,38 @@ try {
     step('reels: style sheet has no characters', (await page.locator('[id^="ch-name-"]').count()) === 0);
     results.axe.reels = (await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']).analyze()).violations;
     await page.screenshot({ path: `${OUT}/reels-1280-light.png` });
+    // VideoExpress paste pack (Create Video From Prompt) for the reel
+    await page.getByRole('tab', { name: 'VideoExpress paste pack' }).click();
+    await page.locator('#view-body-vepack').waitFor();
+    const veScenes = await page.locator('article.ve-scene').count();
+    step('vepack: reel → one card per VideoExpress scene (≥ clips)', veScenes >= expected, `${veScenes} scenes for ${expected} clips`);
+    const chips = await page.locator('article.ve-scene .chip.good, article.ve-scene .chip.bad').allTextContents();
+    step('vepack: every narration fits the 120-character Narration Video box', chips.length === veScenes && chips.every((c) => { const [a, b] = c.split('/').map(Number); return b === 120 && a <= 120; }), chips.join(' '));
+    step('vepack: set-up says Vertical 9:16, Narration Video on, untick public gallery, Consistent Character off (faceless)',
+      await vis(page.locator('.ve-steps li', { hasText: 'Vertical 9:16' })) && await vis(page.locator('.ve-steps li', { hasText: 'Narration Video (Choose my Audio)' })) && await vis(page.locator('.ve-steps li', { hasText: 'Share this in the public gallery' })) && await vis(page.locator('.ve-steps li', { hasText: 'Use Consistent Character: OFF' })));
+    await page.getByRole('button', { name: 'Copy SC-001 image prompt' }).click();
+    await page.locator('#toast').filter({ hasText: 'SC-001 image prompt copied' }).waitFor({ timeout: 5000 });
+    const imgClip = await page.evaluate(() => navigator.clipboard.readText());
+    step('vepack: Copy puts exactly the Image Prompt (tagged [SC-001]) on the clipboard', imgClip.startsWith('[SC-001] ') && imgClip.includes('Style:'), imgClip.slice(0, 80));
+    await page.getByRole('button', { name: 'Copy SC-001 narration' }).click();
+    await page.locator('#toast').filter({ hasText: 'SC-001 narration copied' }).waitFor({ timeout: 5000 });
+    const narrClip = await page.evaluate(() => navigator.clipboard.readText());
+    step('vepack: Copy narration gives only the words to speak (≤120 chars)', narrClip.length > 0 && narrClip.length <= 120 && !narrClip.includes('['), `${narrClip.length} chars`);
+    await page.locator('#ve-settings summary').click();
+    await page.locator('#ve-voice').fill('Ava Test Voice');
+    await page.locator('#ve-save').click();
+    await page.locator('#toast').filter({ hasText: 'Pack settings saved' }).waitFor({ timeout: 5000 });
+    step('vepack: no stray "null" text on the page', !(await page.locator('#view-body-vepack').innerText()).includes('null'));
+    step('vepack: narrator voice setting saved and used in every pack', await vis(page.locator('.ve-voice li', { hasText: 'Ava Test Voice' })));
+    await page.locator('#ve-done-SC-001').check();
+    await page.locator('#save-state').filter({ hasText: 'Saved' }).waitFor({ timeout: 5000 });
+    step('vepack: ticking a scene as made updates progress', /^1 of \d+ scenes made/.test(await page.locator('#ve-progress').textContent()));
+    const dlv = page.waitForEvent('download'); await page.locator('#ve-download').click(); const fv = await dlv;
+    const veMd = fs.readFileSync(await fv.path(), 'utf8');
+    step('vepack: Download pack = Markdown with one code block per box', /videoexpress-pack\.md$/.test(fv.suggestedFilename()) && (veMd.match(/```text\n\[SC-\d{3}\]/g) || []).length === veScenes * 2 && veMd.includes('Ava Test Voice'), fv.suggestedFilename());
+    results.axe.vepack = (await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']).analyze()).violations;
+    await page.screenshot({ path: `${OUT}/vepack-reel-1280.png`, fullPage: true });
+    await page.getByRole('tab', { name: 'Edit by clip' }).click(); await page.locator('article.clip').first().waitFor();
     // studio keeps its own brief when switching back
     await page.getByRole('link', { name: 'Studio', exact: true }).click();
     { await page.locator('#characterNotes').waitFor(); const cv = await page.locator('#concept').inputValue(); step('reels: Studio brief preserved while switching sections', /baker/.test(cv), cv.slice(0, 80)); }
@@ -299,6 +331,13 @@ try {
     await page.locator('#toast').filter({ hasText: /scripts by service copied/i }).waitFor({ timeout: 5000 });
     const g = await page.evaluate(() => navigator.clipboard.readText());
     step('series: Copy scripts-by-service for the whole series', (g.match(/^# Episode \d+:/gm) || []).length === written && /Image scripts/.test(g));
+    await page.locator('#series-ve-copy').click();
+    await page.locator('#toast').filter({ hasText: /VideoExpress paste pack copied/ }).waitFor({ timeout: 5000 });
+    const vp = await page.evaluate(() => navigator.clipboard.readText());
+    const narrBlocks = [...vp.matchAll(/\*\*Narration\*\*[^\n]*\n\n```text\n([\s\S]*?)\n```/g)].map((m) => m[1]);
+    step('series: Copy VideoExpress paste pack = every episode, one voice, E01-SC-001 tags, all narration ≤120 chars',
+      (vp.match(/^# Episode \d+:/gm) || []).length === written && (vp.match(/Narrator voice: the SAME/g) || []).length === 1 && vp.includes('[E01-SC-001]') && narrBlocks.length > 0 && narrBlocks.every((t) => t.length <= 120),
+      `${written} episodes, ${narrBlocks.length} narration boxes, longest ${Math.max(...narrBlocks.map((t) => t.length))}`);
     await page.locator('#series-md-view').click();
     await page.locator('#text-dialog').waitFor();
     step('series: View opens the full text in a window with Copy/Download', (await page.locator('#text-dialog-body').inputValue()).length === clip.length && await vis(page.locator('#text-dialog-copy')) && await vis(page.locator('#text-dialog-download')));

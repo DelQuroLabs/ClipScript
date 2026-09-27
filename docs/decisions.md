@@ -59,3 +59,19 @@
   - The dump box: a pre-analysis estimate.
 - **Check:** the real "Not Today, Gus" run (908 in / 4,033 out on luna) comes to $0.0050. A 100-fact series on luna is estimated at about $0.25–$0.60.
 - These are estimates only; the provider's invoice is the truth.
+
+## D-014 · VideoExpress paste pack (Create Video From Prompt) · 2026-09-27
+- **Why:** the user wants copy-paste that matches VideoExpress's own boxes, keeps characters consistent, and uses Narration Video so the audio stays consistent.
+- **Source of field names/limits:** VideoExpress's published agent workflows (videoexpress.ai/workflow: the "Full-Length Consistent Character" and "CloneVoice + VideoExpress Narrative Video" system prompts). These give:
+  - the fields Image Prompt, Video Prompt (it is called "Video and Audio Prompt" until Narration Video is on), Narration Video (Choose my Audio) and the Create Narration Video - Create Audio dialog;
+  - the 120-character narration box and the Lipsync HD Actor 1/2 Script (under 100 characters);
+  - Use Consistent Character with Reference Photo / Reference Photo 2, Image Type, and the public-gallery checkbox (on by default).
+- **Design:** `lib/domain/vepack.js` (pure). There is one card per VideoExpress scene with one Copy per box. Scene tags `[SC-001]` (series: `[E01-SC-001]`) appear in the Media Library captions, which fixes the problem that the library shows clips newest first rather than in story order.
+  - Narration longer than 120 characters is split at a sentence, then a clause, then a word boundary into extra scenes that reuse the same picture. No word is ever dropped.
+  - Character bibles are pasted word-for-word into every Image Prompt, and character reference pictures come first.
+  - One narrator voice (default: CloneVoice.ai · System · English · Lucas Rhodes) is saved in the account settings (`settings.ve`) and used for every scene and episode.
+  - Faceless scripts get Consistent Character OFF plus a style lock.
+- **UI:**
+  - Project / Reel / episode: a "VideoExpress paste pack" tab.
+  - Series: an export group (Copy / Download / View) using `?format=vepack`.
+- **Evidence:** unit 71/71 (vepack 7), API 15/15, E2E 104/104 (12 new vepack steps, axe clean).

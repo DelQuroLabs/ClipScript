@@ -13,6 +13,7 @@ import { PROVIDERS, providerById, MODEL_ID_RE } from '../lib/domain/providers.js
 import { normalizeBrief, validateBrief, wordBudgetFor } from '../lib/domain/project.js';
 import { extractJson, normalizeScript, analyzeScript, composeImagePrompt } from '../lib/domain/script.js';
 import { guideMarkdown } from '../lib/domain/guide.js';
+import { vePackSeriesMarkdown, normalizeVeSettings } from '../lib/domain/vepack.js';
 import { costOf, priceFor, normalizePriceOverrides, estimateSeriesWrite, priceRange, PRICES_SOURCE } from '../lib/domain/pricing.js';
 import { normalizeSeriesSettings, validateSeriesSettings, normalizePlan, applyPlanEdits, planStats, normalizeEpisode, analyzeEpisode, layoutEpisode, seriesCsv, episodeMarkdown, SERIES_LIMITS } from '../lib/domain/series.js';
 import { seriesSystemPrompt, extractPrompt, planPrompt, episodePrompt, SERIES_PROMPT_VERSION } from '../lib/domain/seriesPrompts.js';
@@ -26,7 +27,7 @@ export function createApp(config = {}) {
   const cfg = {
     dbFile: config.dbFile ?? process.env.DATABASE_FILE ?? path.join(process.cwd(), 'data', 'clipscript.db'),
     encryptionKey: config.encryptionKey ?? process.env.APP_ENCRYPTION_KEY,
-    registration: config.registration ?? process.env.REGISTRATION ?? 'open', // open | closed | first-user
+    registration: config.registration ?? process.env.REGISTRATION ?? (process.env.NODE_ENV === 'production' ? 'first-user' : 'open'), // open | closed | first-user
     cookieSecure: config.cookieSecure ?? (process.env.COOKIE_SECURE ? process.env.COOKIE_SECURE === 'true' : process.env.NODE_ENV === 'production'),
     publicOrigin: config.publicOrigin ?? process.env.PUBLIC_ORIGIN ?? '',
     staticDir: config.staticDir ?? path.join(__dirname, '..', 'dist'),
@@ -239,6 +240,7 @@ export function createApp(config = {}) {
     if (b.autoFit !== undefined) s.autoFit = !!b.autoFit;
     if (b.priceOverrides !== undefined) s.priceOverrides = normalizePriceOverrides(b.priceOverrides);
     if (b.briefDefaults !== undefined) s.briefDefaults = normalizeBrief(b.briefDefaults);
+    if (b.ve !== undefined) s.ve = normalizeVeSettings(b.ve);
     q.updSettings.run(JSON.stringify(s), req.user.id);
     res.json({ settings: s });
   });
@@ -632,6 +634,9 @@ export function createApp(config = {}) {
       const head = [`# ${ser.plan?.seriesTitle || ser.title}: scripts by VideoExpress service`, '', `${eps.length} episodes. Each one lists its image scripts, video scripts and sound scripts. VideoExpress makes the images, video and sound.`, ''];
       res.set('content-type', 'text/markdown; charset=utf-8').set('content-disposition', `attachment; filename="${name}-scripts-by-service.md"`)
         .send(head.join('\n') + '\n' + eps.map((e) => guideMarkdown(e.script, e.brief, `# Episode ${e.no}: ${e.script.title}`)).join('\n---\n\n'));
+    } else if (req.query.format === 'vepack') {
+      res.set('content-type', 'text/markdown; charset=utf-8').set('content-disposition', `attachment; filename="${name}-videoexpress-pack.md"`)
+        .send(vePackSeriesMarkdown(ser.plan?.seriesTitle || ser.title, eps, normalizeVeSettings(settingsOf(req.user).ve)));
     } else if (req.query.format === 'csv') {
       res.set('content-type', 'text/csv; charset=utf-8').set('content-disposition', `attachment; filename="${name}.csv"`).send(seriesCsv(ser, eps, compose));
     } else {

@@ -95,3 +95,19 @@ npm test && npm run test:api && npm run test:e2e   # e2e needs: npx playwright i
 The suggested model IDs were checked in Sept 2026: `gpt-5.6-sol|terra|luna`, `claude-sonnet-5`, `gemini-3.8-flash`, `grok-4.6`. You can type any model ID. **Test key** lists the models your key can actually use.
 
 *Independent tool, not affiliated with VideoExpress. It doesn't log into or automate app.videoexpress.ai: you copy the prompts over.*
+
+## VideoExpress paste pack
+
+Every Reel, Studio project and Series episode has a **VideoExpress paste pack** tab. It lists each scene in the exact boxes of VideoExpress → Create with AI → **Create Video From Prompt**:
+
+- **Image Prompt**
+- **Video Prompt**
+- **Narration** (up to 120 characters), or the Lipsync Actor scripts
+
+Each box has its own Copy button. The pack also includes:
+
+- a one-time set-up list;
+- a single narrator voice that is the same in every scene (change it under *Voice & picture settings*);
+- character reference pictures for **Use Consistent Character**.
+
+The Series page can copy or download the whole series as one pack.

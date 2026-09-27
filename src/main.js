@@ -7,13 +7,14 @@ import { clipFit, clipLimits, analyzeScript, composeImagePrompt, composeLastFram
 import { seriesView, stopSeriesPoll } from './series.js';
 import { buildGuide, guideProgress, guideMarkdown } from '../lib/domain/guide.js';
 import { costOf, formatUsd, priceFor, priceKey } from '../lib/domain/pricing.js';
+import { buildVePack, vePackMarkdown, normalizeVeSettings, VE_LIMITS, VE_VOICE_TABS, VE_IMAGE_TYPES } from '../lib/domain/vepack.js';
 
 const VE_URL = 'https://app.videoexpress.ai';
 const state = {
   user: null, providers: [], keys: [], projects: [],
   project: null, // {id, brief, script, meta}
   brief: defaultBrief(), busy: null, error: null, embedStyle: true,
-  view: (() => { try { return localStorage.getItem('cs_view') === 'guide' ? 'guide' : 'clips'; } catch { return 'clips'; } })(),
+  view: (() => { try { const v = localStorage.getItem('cs_view'); return ['guide', 'vepack'].includes(v) ? v : 'clips'; } catch { return 'clips'; } })(),
   locks: new Set(), lastSeed: null,
   stash: { story: null, reel: null }, // each mode keeps its own brief + project while you switch sections
 };
@@ -474,6 +475,7 @@ function renderScriptPanel() {
 
   panel.append(viewTabs());
   if (state.view === 'guide') { panel.append(guidePanel(script, brief)); restorePanelFocus(focusId, sel); return; }
+  if (state.view === 'vepack') { panel.append(vePackPanel(script, brief)); restorePanelFocus(focusId, sel); return; }
   const clipsBody = h('div', { id: 'view-body-clips', role: 'tabpanel', 'aria-labelledby': 'view-clips', class: 'clips-body' });
   panel.append(clipsBody);
   clipsBody.append(styleSheetCard(script));
@@ -493,7 +495,102 @@ function viewTabs() {
     onClick: () => { state.view = id; try { localStorage.setItem('cs_view', id); } catch { /* */ } renderScriptPanel(); document.getElementById(`view-${id}`)?.focus(); } }, icon(ic, 16), label);
   return h('div', { class: 'tabs', role: 'tablist', 'aria-label': 'How to show the script' },
     tab('clips', 'Edit by clip', 'film', 'Everything for one clip together; edit prompts and lines'),
+    tab('vepack', 'VideoExpress paste pack', 'copy', 'Scene by scene, in the exact boxes of VideoExpress → Create Video From Prompt'),
     tab('guide', 'Scripts by VideoExpress service', 'check', 'The scripts grouped by VideoExpress service: image → video → sound'));
+}
+/** Copy-paste pack for VideoExpress → Create Video From Prompt: one card per scene, one Copy per box. */
+function vePackPanel(script, brief) {
+  const ve = normalizeVeSettings(state.user.settings.ve);
+  const pack = buildVePack(script, brief, ve);
+  script.buildProgress ||= {};
+  const done = script.buildProgress;
+  const wrap = h('div', { id: 'view-body-vepack', role: 'tabpanel', 'aria-labelledby': 'view-vepack', class: 'guide vepack' });
+  const md = () => vePackMarkdown(pack);
+  const file = `${slug(script.title)}-videoexpress-pack.md`;
+  const doneCount = () => pack.scenes.filter((s) => done[`ve-${s.id}`]).length;
+  const progress = h('span', { class: 'hint', id: 've-progress', 'aria-live': 'polite' });
+  const bar = h('span');
+  const paint = () => { const n = doneCount(); progress.textContent = `${n} of ${pack.scenes.length} scenes made in VideoExpress`; bar.style.width = `${pack.scenes.length ? Math.round((n / pack.scenes.length) * 100) : 0}%`; };
+  paint();
+  wrap.append(h('div', { class: 'card guide-top' },
+    h('div', { class: 'guide-top-row' }, h('h3', null, 'VideoExpress paste pack'), progress),
+    h('p', { class: 'hint' }, `For VideoExpress → Create with AI → Create Video From Prompt · ${pack.scenes.length} scenes · about ${pack.totalSeconds}s · ${pack.orientation} · Image Type ${pack.imageType}${pack.voice ? ` · voice ${pack.voice.label}` : ''}`),
+    h('div', { class: 'progress', role: 'progressbar', 'aria-label': 'Scenes made', 'aria-valuemin': 0, 'aria-valuemax': pack.scenes.length, 'aria-valuenow': doneCount() }, bar),
+    h('div', { class: 'toolbar' },
+      h('button', { class: 'btn primary sm', type: 'button', id: 've-copy-all', onClick: () => copyText(md(), 'Whole paste pack copied') }, icon('copy'), 'Copy whole pack'),
+      h('button', { class: 'btn sm', type: 'button', id: 've-download', onClick: () => { download(file, md(), 'text/markdown'); toast(`Downloading ${file}`, 'ok'); } }, icon('download'), 'Download pack'),
+      h('a', { class: 'btn ghost sm', href: VE_URL, target: '_blank', rel: 'noopener noreferrer' }, icon('ext'), 'Open VideoExpress'))));
+
+  // Pack settings (saved to the account so every project and series uses the same voice)
+  const f = { ...ve };
+  const inp = (id, label, key, hint) => h('div', { class: 'field' }, h('label', { for: id }, label), h('input', { id, value: f[key], maxlength: 80, onInput: (e) => { f[key] = e.target.value; } }), hint ? h('p', { class: 'hint' }, hint) : null);
+  wrap.append(h('details', { class: 'card ve-settings', id: 've-settings' },
+    h('summary', null, h('h3', null, 'Voice & picture settings'), h('span', { class: 'hint' }, `Same for every video: ${pack.voice ? pack.voice.label : ve.voice} · Image Type ${ve.imageType}`)),
+    h('div', { class: 'grid2' },
+      h('div', { class: 'field' }, h('label', { for: 've-tab' }, 'Voice comes from'), h('select', { id: 've-tab', onChange: (e) => { f.voiceTab = e.target.value; } }, VE_VOICE_TABS.map((t) => h('option', { value: t, selected: t === f.voiceTab ? true : null }, t)))),
+      inp('ve-voice', 'Voice name (exactly as VideoExpress shows it)', 'voice', 'Pick it once in VideoExpress and use it for every scene. Default: Lucas Rhodes.'),
+      inp('ve-category', 'CloneVoice category', 'category'),
+      inp('ve-language', 'Language', 'language'),
+      h('div', { class: 'field' }, h('label', { for: 've-imgtype' }, 'Image Type'), h('select', { id: 've-imgtype', onChange: (e) => { f.imageType = e.target.value; } }, VE_IMAGE_TYPES.map((t) => h('option', { value: t, selected: t === f.imageType ? true : null }, t === 'auto' ? `auto (from the style: ${buildVePack(script, brief, { ...ve, imageType: 'auto' }).imageType})` : t)))),
+      h('label', { class: 'check' }, h('input', { type: 'checkbox', id: 've-enhance', checked: f.autoEnhance, onChange: (e) => { f.autoEnhance = e.target.checked; } }), ' Tell me to turn on “Automatically enhance my image prompt”')),
+    h('div', { class: 'toolbar' }, h('button', { class: 'btn sm', type: 'button', id: 've-save', onClick: async () => { try { await saveSettings({ ve: f }); toast('Pack settings saved', 'ok'); renderScriptPanel(); } catch (e) { toast(e.message, 'error'); } } }, 'Save settings'))));
+
+  const field = (label, text, aria, extra) => h('div', { class: 've-field' },
+    h('div', { class: 'gi-head' }, h('strong', null, label), extra || null,
+      h('button', { class: 'btn sm', type: 'button', 'aria-label': `Copy ${aria}`, onClick: () => copyText(text, `${aria} copied`) }, icon('copy'), 'Copy')),
+    h('pre', { class: 'gi-text' }, text));
+
+  // 1 · Set up once
+  wrap.append(h('section', { class: 'card guide-sec', 'aria-labelledby': 've-setup-h' },
+    h('div', { class: 'guide-head' }, h('span', { class: 'clip-num', 'aria-hidden': 'true' }, '1'), h('div', null, h('h3', { id: 've-setup-h' }, 'Set up once'), h('p', { class: 'hint' }, 'Do this when you open Create Video From Prompt.'))),
+    h('ol', { class: 've-steps' }, pack.setup.map((s) => h('li', null, s))),
+    pack.voice ? h('div', { class: 've-voice' }, h('h4', null, 'Narrator voice: the same in every scene'), h('ul', null, pack.voice.steps.map((s) => h('li', null, s))),
+      h('button', { class: 'btn sm ghost', type: 'button', 'aria-label': 'Copy voice name', onClick: () => copyText(ve.voice, 'Voice name copied') }, icon('copy'), `Copy “${ve.voice}”`)) : null));
+
+  // 2 · Characters
+  if (pack.characters.length) {
+    wrap.append(h('section', { class: 'card guide-sec', 'aria-labelledby': 've-chars-h' },
+      h('div', { class: 'guide-head' }, h('span', { class: 'clip-num', 'aria-hidden': 'true' }, '2'), h('div', null, h('h3', { id: 've-chars-h' }, 'Characters: make these pictures first'),
+        h('p', { class: 'hint' }, 'For each one: untick “Use Consistent Character” → paste into Image Prompt → Create Image → hover the best picture → Save Image (goes to “My AI Images”). Then tick “Use Consistent Character” and put the picture in Reference Photo.'))),
+      ...pack.characters.map((c, i) => h('div', { class: 'guide-item' }, field(`${c.id} · ${c.name}${i < 2 ? ` → ${i === 0 ? 'Reference Photo' : 'Reference Photo 2'}` : ''}`, c.refPrompt, `${c.name} character picture prompt`), c.voice ? h('p', { class: 'hint' }, `Voice: ${c.voice}`) : null))));
+  }
+  if (pack.warnings.length) wrap.append(h('div', { class: 'card warnbox', role: 'note' }, pack.warnings.map((w) => h('p', null, w))));
+
+  // 3 · Scenes
+  const sec = h('section', { class: 'card guide-sec', 'aria-labelledby': 've-scenes-h' },
+    h('div', { class: 'guide-head' }, h('span', { class: 'clip-num', 'aria-hidden': 'true' }, pack.characters.length ? '3' : '2'), h('div', null, h('h3', { id: 've-scenes-h' }, `Scenes (${pack.scenes.length})`),
+      h('p', { class: 'hint' }, 'Top to bottom, one scene at a time. The [SC-…] tag shows in the VideoExpress Media Library, so you always know which clip is which.'))));
+  for (const s of pack.scenes) {
+    const key = `ve-${s.id}`;
+    const card = h('article', { class: `guide-item ve-scene ${done[key] ? 'done' : ''}`, id: `ve-${s.id}`, 'aria-labelledby': `ve-${s.id}-h` });
+    const cb = h('input', { type: 'checkbox', id: `ve-done-${s.id}`, checked: !!done[key], onChange: (e) => {
+      editScript((sc) => { sc.buildProgress ||= {}; if (e.target.checked) sc.buildProgress[key] = true; else delete sc.buildProgress[key]; });
+      card.classList.toggle('done', e.target.checked); paint();
+    } });
+    const routeLabel = s.route === 'narration' ? 'Narration' : s.route === 'lipsync' ? 'Lipsync · on camera' : 'No voice';
+    card.append(...[
+      h('div', { class: 'gi-head' }, h('h4', { id: `ve-${s.id}-h` }, `${s.id} · Clip ${s.clip}${s.part ? ` (part ${s.part})` : ''}${s.beat ? ` · ${s.beat}` : ''}`),
+        h('span', { class: `chip ${s.route}` }, `${routeLabel} · ~${s.seconds}s`),
+        h('label', { class: 'check sm', for: `ve-done-${s.id}` }, cb, ' Made')),
+      s.refs.length ? h('p', { class: 'hint' }, `Use Consistent Character ON · ${s.refs.map((r) => `${r.slot}: ${r.name}`).join(' · ')}${s.refs.length < 2 ? ' · Reference Photo 2: empty' : ''}`) : null,
+      s.reuseImageOf ? h('p', { class: 'hint' }, `Same picture as ${s.reuseImageOf}: select it again in the carousel (or paste the prompt below).`) : null,
+      field('① Image Prompt → Create Image → click the newest picture', s.imagePrompt, `${s.id} image prompt`),
+      field(`② ${s.route === 'narration' ? 'Video Prompt' : 'Video and Audio Prompt'} → Create Video`, s.videoPrompt, `${s.id} video prompt`)].filter(Boolean));
+    if (s.route === 'narration') card.append(field('③ Narration → Import Speech → Create Narration Video', s.narration, `${s.id} narration`,
+      h('span', { class: `chip ${s.chars > VE_LIMITS.NARRATION_MAX ? 'bad' : 'good'}` }, `${s.chars}/${VE_LIMITS.NARRATION_MAX}`)));
+    if (s.route === 'lipsync') {
+      card.append(field('③ Create Lipsync Audio → Video Prompt', s.actorPrompt, `${s.id} lipsync video prompt`));
+      s.actors.forEach((a, i) => card.append(field(`${i === 0 ? '④' : '⑤'} ${a.label} (${a.speaker})${i === s.actors.length - 1 ? ' → Create' : ''}`, a.script, `${s.id} ${a.label}`,
+        i === 0 ? h('span', { class: `chip ${s.chars > VE_LIMITS.LIPSYNC_MAX ? 'bad' : 'good'}` }, `${s.chars}/${VE_LIMITS.LIPSYNC_MAX} total`) : null)));
+      if (s.actors.length > 1) card.append(h('p', { class: 'hint' }, 'Click “Add Actor 2” for the second script.'));
+    }
+    const notes = [s.onScreenText && `On-screen text (add in the editor): ${s.onScreenText}`, s.sfx && s.route !== 'silent' && `Sound idea (optional, in the editor): ${s.sfx}`].filter(Boolean);
+    if (notes.length) card.append(h('p', { class: 'hint' }, notes.join(' · ')));
+    sec.append(card);
+  }
+  wrap.append(sec);
+  wrap.append(h('p', { class: 'hint ve-finish' }, 'Finish: Media Library → My AI Videos → drag the clips onto the timeline in SC order (read the [SC-…] tag in each caption).'));
+  return wrap;
 }
 /** Script regrouped into sections that match the VideoExpress build, with saved progress checkboxes. */
 function guidePanel(script, brief) {

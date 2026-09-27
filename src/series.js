@@ -155,10 +155,11 @@ function detailView(ctx, id) {
     md: { title: 'Whole series (Markdown)', ext: 'md', type: 'text/markdown', suffix: '' },
     guide: { title: 'Whole series: scripts by service', ext: 'md', type: 'text/markdown', suffix: '-scripts-by-service' },
     csv: { title: 'Whole series (CSV)', ext: 'csv', type: 'text/csv', suffix: '' },
+    vepack: { title: 'Whole series: VideoExpress paste pack', ext: 'md', type: 'text/markdown', suffix: '-videoexpress-pack' },
   };
   const fileFor = (fmt) => `${slug(data.series.title)}${EXPORTS[fmt].suffix}.${EXPORTS[fmt].ext}`;
   const getExport = async (fmt) => (cache[fmt] ??= await apiText(`/api/series/${id}/export?format=${fmt}`));
-  const prefetch = () => { for (const f of ['md', 'guide']) getExport(f).catch(() => { delete cache[f]; }); };
+  const prefetch = () => { for (const f of ['vepack', 'md', 'guide']) getExport(f).catch(() => { delete cache[f]; }); };
   const exportAs = async (fmt, how) => {
     const had = cache[fmt] != null;
     let t;
@@ -201,6 +202,10 @@ function detailView(ctx, id) {
         live && s.status === 'writing' ? h('button', { class: 'btn warn', type: 'button', id: 'series-pause', onClick: () => act('pause', null, 'Pausing after the current episode…') }, 'Pause')
           : h('button', { class: 'btn primary', type: 'button', id: 'series-write', onClick: () => act('write', null, 'Writing started. You can leave this page; it keeps going.') }, icon('spark'), h('span', null, 'Write')),
         !live && st?.failed ? h('button', { class: 'btn', type: 'button', id: 'series-retry', onClick: () => act('write', { episodes: plan.episodes.filter((e) => e.status === 'failed').map((e) => e.no) }) }, icon('refresh'), `Retry ${st.failed} failed`) : null,
+        h('div', { class: 'export-group primary', role: 'group', 'aria-labelledby': 'export-ve-l' }, h('span', { class: 'eg-label', id: 'export-ve-l' }, 'VideoExpress paste pack'),
+          h('button', { class: 'btn sm primary', type: 'button', id: 'series-ve-copy', disabled: !episodes.length, onClick: () => exportAs('vepack', 'copy') }, icon('copy'), 'Copy'),
+          h('button', { class: 'btn sm', type: 'button', id: 'series-ve', disabled: !episodes.length, onClick: () => exportAs('vepack', 'download') }, icon('download'), 'Download'),
+          h('button', { class: 'btn sm ghost', type: 'button', id: 'series-ve-view', disabled: !episodes.length, onClick: () => exportAs('vepack', 'view') }, 'View')),
         h('div', { class: 'export-group', role: 'group', 'aria-labelledby': 'export-md-l' }, h('span', { class: 'eg-label', id: 'export-md-l' }, 'Whole series · Markdown'),
           h('button', { class: 'btn sm', type: 'button', id: 'series-md-copy', disabled: !episodes.length, onClick: () => exportAs('md', 'copy') }, icon('copy'), 'Copy'),
           h('button', { class: 'btn sm', type: 'button', id: 'series-md', disabled: !episodes.length, onClick: () => exportAs('md', 'download') }, icon('download'), 'Download'),

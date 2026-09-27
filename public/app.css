@@ -304,3 +304,23 @@ dialog.text-dialog::backdrop { background: rgb(0 0 0 / .45); }
 .td-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
 .td-head h2 { margin: 0; font-size: 1.15rem; }
 #text-dialog-body { width: 100%; font: .85rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; min-height: 40vh; margin-top: 8px; }
+/* VideoExpress paste pack */
+.vepack .ve-scene { border-left: 4px solid var(--accent, #6d5efc); }
+.vepack .ve-scene.done { background: var(--surface-2); }
+.vepack .ve-scene.done h4 { text-decoration: line-through; }
+.vepack .ve-scene h4 { margin: 0; font-size: 1rem; }
+.vepack .ve-scene > .gi-head { flex-wrap: wrap; gap: 8px; }
+.vepack .ve-scene .chip { margin-left: 0; }
+.vepack .ve-field { margin-top: 10px; }
+.vepack .ve-field .gi-head { display: flex; align-items: center; gap: 8px; }
+.vepack .ve-field .gi-head .btn { margin-left: auto; }
+.vepack .ve-field .chip { margin-left: 0; }
+.chip.good { background: var(--ok-soft); color: var(--text); }
+.chip.bad { background: var(--bad-soft); color: var(--text); }
+.chip.narration, .chip.lipsync, .chip.silent { color: var(--text); }
+.vepack .ve-steps li, .vepack .ve-voice li { margin: 4px 0; }
+.vepack .ve-voice { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); }
+.vepack .ve-voice h4 { margin: 0 0 4px; }
+.ve-settings .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-top: 10px; }
+.warnbox { border-left: 4px solid #bf8700; }
+.export-group.primary { border-color: var(--accent, #6d5efc); border-width: 2px; }
