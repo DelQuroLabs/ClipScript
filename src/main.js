@@ -8,6 +8,7 @@ import { seriesView, stopSeriesPoll } from './series.js';
 import { buildGuide, guideProgress, guideMarkdown } from '../lib/domain/guide.js';
 import { costOf, formatUsd, priceFor, priceKey } from '../lib/domain/pricing.js';
 import { RUBRIC, scoreLabel, TARGET_SCORE } from '../lib/domain/quality.js';
+import { CRITICS, VETO_BELOW, enabledCritics } from '../lib/domain/critics.js';
 import { buildVePack, vePackMarkdown, normalizeVeSettings, VE_LIMITS, VE_VOICE_TABS, VE_IMAGE_TYPES } from '../lib/domain/vepack.js';
 
 const VE_URL = 'https://app.videoexpress.ai';
@@ -15,7 +16,7 @@ const state = {
   user: null, providers: [], keys: [], projects: [],
   project: null, // {id, brief, script, meta}
   brief: defaultBrief(), busy: null, error: null, embedStyle: true,
-  view: (() => { try { const v = localStorage.getItem('cs_view'); return ['guide', 'vepack'].includes(v) ? v : 'clips'; } catch { return 'clips'; } })(),
+  view: (() => { try { const v = localStorage.getItem('cs_view'); return ['guide', 'vepack', 'critics'].includes(v) ? v : 'clips'; } catch { return 'clips'; } })(),
   locks: new Set(), lastSeed: null,
   stash: { story: null, reel: null }, // each mode keeps its own brief + project while you switch sections
 };
@@ -475,14 +476,19 @@ function qualityCard(proj) {
   const card = h('section', { class: 'card quality', 'aria-labelledby': 'quality-h' });
   const head = h('div', { class: 'q-head' },
     h('div', null, h('h3', { id: 'quality-h', tabindex: '-1' }, icon('star'), ' Script quality'),
-      h('p', { class: 'hint' }, running ? 'The AI is reading the script, fixing the issues it finds and reading it again, until it scores 95+ (max 3 repair rounds). The best version is kept.'
-        : qm ? `Checked with ${qm.model} · ${new Date(qm.at).toLocaleString()}${qm.rounds ? ` · ${qm.rounds} repair round${qm.rounds > 1 ? 's' : ''}` : ''}` : 'Let the AI read and grade this script, then fix it until it scores 95+ out of 100. Uses your API key.')),
+      h('p', { class: 'hint' }, running ? 'The AI and the critic panel read the script, the issues they find are fixed, and it is read again, until it scores 95+ (max 3 repair rounds). The best version is kept.'
+        : qm ? `Checked with ${qm.model} · ${new Date(qm.at).toLocaleString()}${qm.rounds ? ` · ${qm.rounds} repair round${qm.rounds > 1 ? 's' : ''}` : ''}` : 'Let the AI and a panel of critics read and grade this script, then fix it until it scores 95+ out of 100. Uses your API key.')),
     qm && !running ? h('div', { class: `q-score ${scoreCls(qm.score)}`, id: 'quality-score', 'aria-label': `Score ${qm.score} out of 100, ${scoreLabel(qm.score)}` }, h('strong', null, String(qm.score)), h('span', null, `/100 · ${scoreLabel(qm.score)}`)) : null);
   card.append(head);
   if (running) { card.append(polishProgress(state.polish.job)); return card; }
   if (qm) {
     if (qm.history?.length > 1) card.append(h('p', { class: 'hint', id: 'quality-history' }, 'Scores: ', qm.history.map((x) => `${x.round ? `round ${x.round}` : 'first read'} ${x.score}`).join(' → ')));
     if (qm.summary) card.append(h('p', { class: 'q-summary' }, qm.summary));
+    if (qm.critics?.length) {
+      const bl = qm.critics.filter((c) => c.score < VETO_BELOW);
+      card.append(h('p', { class: 'q-critics', id: 'quality-critics' }, h('strong', null, `Critic panel: ${qm.criticAvg}/10`), ` from ${qm.critics.length} viewpoints${bl.length ? ` · blocking: ${bl.map((c) => c.name).join(', ')}` : ''} `,
+        h('button', { class: 'btn sm ghost', type: 'button', id: 'open-critics', onClick: () => { state.view = 'critics'; try { localStorage.setItem('cs_view', 'critics'); } catch { /* */ } renderScriptPanel(); document.getElementById('critics-h')?.scrollIntoView(); } }, 'See every critic')));
+    }
     const bars = h('ul', { class: 'q-bars', 'aria-label': 'Score by area' });
     for (const r of RUBRIC) {
       const v = qm.scores?.[r.id] ?? 0, pct = Math.round((v / r.max) * 100);
@@ -497,7 +503,7 @@ function qualityCard(proj) {
   card.append(h('div', { class: 'toolbar' },
     h('button', { class: 'btn primary', type: 'button', id: 'polish-btn', disabled: !!state.busy, onClick: () => startPolish(3) }, icon('star'), qm && qm.score >= TARGET_SCORE ? 'Polish again' : 'Polish to 95+'),
     h('button', { class: 'btn', type: 'button', id: 'score-btn', disabled: !!state.busy, onClick: () => startPolish(0) }, qm ? 'Re-score' : 'Score only'),
-    h('span', { class: 'hint' }, `Model: ${model} · about 2–7 AI calls`)));
+    h('span', { class: 'hint' }, `Model: ${model} · ${enabledCritics(state.user.settings).length} critics · about 2–7 AI calls`)));
   return card;
 }
 
@@ -568,6 +574,7 @@ function renderScriptPanel() {
   panel.append(viewTabs());
   if (state.view === 'guide') { panel.append(guidePanel(script, brief)); restorePanelFocus(focusId, sel); return; }
   if (state.view === 'vepack') { panel.append(vePackPanel(script, brief)); restorePanelFocus(focusId, sel); return; }
+  if (state.view === 'critics') { panel.append(criticsPanel(proj)); restorePanelFocus(focusId, sel); return; }
   const clipsBody = h('div', { id: 'view-body-clips', role: 'tabpanel', 'aria-labelledby': 'view-clips', class: 'clips-body' });
   panel.append(clipsBody);
   clipsBody.append(styleSheetCard(script));
@@ -588,7 +595,56 @@ function viewTabs() {
   return h('div', { class: 'tabs', role: 'tablist', 'aria-label': 'How to show the script' },
     tab('clips', 'Edit by clip', 'film', 'Everything for one clip together; edit prompts and lines'),
     tab('vepack', 'VideoExpress paste pack', 'copy', 'Scene by scene, in the exact boxes of VideoExpress → Create Video From Prompt'),
-    tab('guide', 'Scripts by VideoExpress service', 'check', 'The scripts grouped by VideoExpress service: image → video → sound'));
+    tab('guide', 'Scripts by VideoExpress service', 'check', 'The scripts grouped by VideoExpress service: image → video → sound'),
+    tab('critics', 'Critic panel', 'star', 'The script audited from 10 viewpoints; their notes feed Polish to 95+'));
+}
+const critCls = (x) => (x >= 8 ? 'good' : x >= VETO_BELOW ? 'mid' : 'bad');
+/** Critic panel: the script audited from many viewpoints. Runs inside Polish to 95+ (and Score only). */
+function criticsPanel(proj) {
+  const qm = proj.meta?.quality;
+  const running = state.busy === 'polish';
+  const on = new Set(enabledCritics(state.user.settings));
+  const wrap = h('div', { id: 'view-body-critics', role: 'tabpanel', 'aria-labelledby': 'view-critics', class: 'critics' });
+  const crit = qm?.critics || [];
+  const avg = qm?.criticAvg;
+  const blocking = crit.filter((c) => c.score < VETO_BELOW);
+  wrap.append(h('div', { class: 'card guide-top' },
+    h('div', { class: 'q-head' },
+      h('div', null, h('h3', { id: 'critics-h' }, 'Critic panel'),
+        h('p', { class: 'hint' }, `${on.size} critics audit the script from their own viewpoint every time it is scored. Their notes go straight into the Repair step of Polish to 95+, and their average counts for 20% of the score. A critic below ${VETO_BELOW}/10 blocks 95+ until it is fixed.`)),
+      avg != null && !running ? h('div', { class: `q-score ${critCls(avg)}`, id: 'critics-avg' }, h('strong', null, String(avg)), h('span', null, `/10 avg${blocking.length ? ` · ${blocking.length} blocking` : ''}`)) : null),
+    running ? h('p', { class: 'hint', role: 'status' }, h('span', { class: 'spinner sm', 'aria-hidden': 'true' }), ' The critics are auditing… progress is shown in Script quality above.')
+      : h('div', { class: 'toolbar' },
+        h('button', { class: 'btn primary', type: 'button', id: 'critics-polish', disabled: !!state.busy, onClick: () => startPolish(3) }, icon('star'), 'Polish to 95+ with the critics'),
+        h('button', { class: 'btn', type: 'button', id: 'critics-run', disabled: !!state.busy, onClick: () => startPolish(0) }, crit.length ? 'Re-run critics (no changes)' : 'Run critics (no changes)')),
+    h('details', { class: 'critic-pick', id: 'critic-pick' }, h('summary', null, `Choose critics (${on.size} of ${CRITICS.length} on)`),
+      h('div', { class: 'critic-toggles' }, CRITICS.map((c) => h('label', { class: 'check sm', title: c.asks },
+        h('input', { type: 'checkbox', id: `critic-on-${c.id}`, checked: on.has(c.id), disabled: running || (on.size === 1 && on.has(c.id)), onChange: async (e) => {
+          const off = CRITICS.map((x) => x.id).filter((id) => (id === c.id ? !e.target.checked : !on.has(id)));
+          try { await saveSettings({ criticsOff: off }); renderScriptPanel(); document.getElementById(`critic-on-${c.id}`)?.focus(); document.getElementById('critic-pick')?.setAttribute('open', ''); } catch (err) { toast(err.message, 'error'); }
+        } }), ` ${c.icon} ${c.name}`))),
+      h('p', { class: 'hint' }, 'Changes apply the next time the script is scored or polished.'))));
+  if (!crit.length) {
+    wrap.append(h('div', { class: 'card empty' }, h('p', null, running ? 'Waiting for the first verdicts…' : 'No verdicts yet. Run the critics or Polish to 95+ to hear from the panel.'),
+      h('ul', { class: 'critic-list-preview' }, CRITICS.filter((c) => on.has(c.id)).map((c) => h('li', null, h('strong', null, `${c.icon} ${c.name}: `), c.focus)))));
+    return wrap;
+  }
+  if (qm.reason) wrap.append(h('p', { class: 'q-failed', role: 'note', id: 'critics-reason' }, h('strong', null, 'Blocking 95+: '), qm.reason));
+  const grid = h('div', { class: 'critic-grid' });
+  for (const c of [...crit].sort((a, b) => a.score - b.score)) {
+    const def = CRITICS.find((x) => x.id === c.id);
+    grid.append(h('article', { class: `card critic ${critCls(c.score)}`, id: `critic-${c.id}`, 'aria-labelledby': `critic-${c.id}-h` },
+      h('div', { class: 'critic-top' },
+        h('h4', { id: `critic-${c.id}-h` }, h('span', { 'aria-hidden': 'true' }, `${c.icon} `), c.name),
+        h('span', { class: `critic-score ${critCls(c.score)}`, 'aria-label': `${c.score} out of 10` }, `${c.score}/10`)),
+      c.score < VETO_BELOW ? h('span', { class: 'sev high' }, 'blocking') : null,
+      h('p', { class: 'critic-verdict' }, c.verdict ? `“${c.verdict}”` : ''),
+      c.notes.length ? h('ul', { class: 'critic-notes' }, c.notes.map((n) => h('li', null, h('span', { class: `sev ${n.severity}` }, n.severity), ` ${n.clip ? `Clip ${n.clip}` : 'Whole script'} · ${n.problem} `, n.fix ? h('em', null, `Fix: ${n.fix}`) : null)))
+        : h('p', { class: 'hint' }, 'No notes.'),
+      def ? h('p', { class: 'hint critic-focus' }, def.focus) : null));
+  }
+  wrap.append(grid);
+  return wrap;
 }
 /** Copy-paste pack for VideoExpress → Create Video From Prompt: one card per scene, one Copy per box. */
 function vePackPanel(script, brief) {

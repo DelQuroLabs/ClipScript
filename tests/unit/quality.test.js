@@ -49,10 +49,10 @@ test('normalizeReview clamps untrusted scores and recomputes the total', () => {
 
 test('combineScore: 80/20 blend, capped below target when any hard check fails', () => {
   const full = normalizeReview({ scores: Object.fromEntries(RUBRIC.map((r) => [r.id, r.max])) });
-  assert.deepEqual(combineScore(full, { score: 100, failed: [] }), { score: 100, capped: false });
-  assert.deepEqual(combineScore(full, { score: 90, failed: [{}] }), { score: TARGET_SCORE - 5, capped: true });
+  assert.deepEqual(combineScore(full, { score: 100, failed: [] }), { score: 100, capped: false, reason: '' });
+  assert.deepEqual(combineScore(full, { score: 90, failed: [{}] }), { score: TARGET_SCORE - 5, capped: true, reason: 'automatic checks failed' });
   const low = normalizeReview({ scores: { hook: 6, story: 7, accuracy: 7, voice: 7, images: 8, motion: 6, consistency: 5, videoexpress: 4 } });
-  assert.deepEqual(combineScore(low, { score: 60, failed: [{}] }), { score: Math.round(50 * 0.8 + 12), capped: false });
+  assert.deepEqual(combineScore(low, { score: 60, failed: [{}] }), { score: Math.round(50 * 0.8 + 12), capped: false, reason: 'automatic checks failed' });
   assert.equal(scoreLabel(96), 'Excellent'); assert.equal(scoreLabel(70), 'Needs work');
 });
 

@@ -114,3 +114,19 @@ The Series page can copy or download the whole series as one pack.
 
 ## Polish to 95+ (script quality loop)
 Open a script and use **Script quality → Polish to 95+**. The AI (your key and model) grades the script on 8 areas, fixes what it finds, then grades it again, for up to 3 rounds. It stops at 95 and always keeps the best version. **Score only** grades without changing anything. On a series page, **Polish N episodes to 95+** does every written episode below 95, one at a time, and shows a Score column in the plan. Each round costs about 2 AI calls.
+
+## Critic panel
+Every time a script is scored or polished, 10 critics audit it from their own viewpoint:
+
+- scroll viewer
+- target audience
+- fact-checker
+- director
+- VideoExpress prompt engineer
+- voice coach
+- continuity
+- story editor
+- platform & brand safety
+- accessibility
+
+Their notes go straight into the Repair step, and their average is 20% of the score. Any critic below 6/10 blocks 95+. Open the **Critic panel** tab to see each verdict and to switch critics on or off. On a series page you see each critic's average across episodes.

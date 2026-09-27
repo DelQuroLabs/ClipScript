@@ -90,3 +90,22 @@
   - Series runs one episode at a time and by default only polishes episodes below 95. It is blocked while a series write is running.
   - The result is saved in `meta.quality` (score, per-area scores, remaining issues, history), and token usage is added to the project/series.
 - **Evidence:** unit 78/78 (quality 7), API 16/16 (polish project + series), E2E 115/115 (11 new steps, axe clean).
+
+## D-016 · Critic panel (script audited from many viewpoints)
+- **Ask:** "a Critic section to audit the scripts from lots of viewpoints". The user chose:
+  - Critic results feed into Polish to 95+ automatically.
+  - The proposed panel of 10.
+  - It works in projects and series.
+- **The 10 critics** (`lib/domain/critics.js`): Scroll viewer, Target audience, Fact-checker, Director/cinematographer, VideoExpress prompt engineer, Voice & narration coach, Continuity supervisor, Story editor, Platform & brand safety, Accessibility. Each has a focus and the questions it asks. Any critic can be switched off (`settings.criticsOff`), but at least one stays on.
+- **In the loop:** the critics run inside the Analyze call (same call, no extra AI calls).
+  - Each critic returns: score 0–10, a one-line verdict, and 0–3 notes.
+  - The notes go into the Repair prompt, lowest-scoring critics first. Blocking critics are marked BLOCKING.
+- **Score:** 60% rubric + 20% critic average + 20% hard checks. Without critics it stays 80/20.
+  - A critic below 6/10 caps the score at target − 1 (a veto). Failed hard checks still cap it at target − 5.
+  - The blocking reason is always reported.
+  - A critic the model skips scores 0, so it can't dodge the audit. The critic scores are clamped and never trusted as-is.
+- **UI:**
+  - A "Critic panel" tab: a card per critic, sorted worst first, with toggles, "Run critics (no changes)" and "Polish to 95+ with the critics".
+  - A critic summary line in Script quality.
+  - Series: per-critic averages across episodes.
+- **Evidence:** unit 83/83 (critics 5), API 16/16 (critic assertions added), E2E 121/121 (6 new steps, axe clean).

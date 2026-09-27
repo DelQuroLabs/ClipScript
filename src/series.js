@@ -284,7 +284,7 @@ function detailView(ctx, id) {
     const card = h('section', { class: 'card quality', 'aria-labelledby': 'squality-h' },
       h('div', { class: 'q-head' }, h('div', null, h('h2', { class: 'h3', id: 'squality-h' }, icon('star'), ' Script quality'),
         h('p', { class: 'hint' }, polishing ? 'Reading, fixing and re-reading each episode until it scores 95+. You can leave this page; it keeps going.'
-          : `Let the AI grade every episode and fix it until it scores ${TARGET_SCORE}+ out of 100 (max 3 repair rounds each; the best version is kept). Uses your API key.`)),
+          : `Let the AI and the critic panel grade every episode and fix it until it scores ${TARGET_SCORE}+ out of 100 (max 3 repair rounds each; the best version is kept). Uses your API key.`)),
         avg != null && !polishing ? h('div', { class: `q-score ${qcls(avg)}`, id: 'series-quality' }, h('strong', null, String(avg)), h('span', null, `avg · ${top}/${data.episodes.length} at ${TARGET_SCORE}+`)) : null));
     if (polishing) {
       const pct = j.total ? Math.round((j.done / j.total) * 100) : 0;
@@ -295,6 +295,9 @@ function detailView(ctx, id) {
         h('button', { class: 'btn sm ghost', type: 'button', id: 'series-polish-stop', onClick: () => act('polish/cancel', null, 'Stopping after the current step…') }, icon('x'), 'Stop'));
       return card;
     }
+    if (data.criticAvgs?.length) card.append(h('div', { class: 'series-critics', id: 'series-critics' },
+      h('p', { class: 'hint' }, h('strong', null, 'Critic panel'), ` · average across ${Math.max(...data.criticAvgs.map((c) => c.n))} scored episode${Math.max(...data.criticAvgs.map((c) => c.n)) > 1 ? 's' : ''} (open an episode → Critic panel for the notes)`),
+      h('ul', { class: 'critic-chips' }, [...data.criticAvgs].sort((x, y) => x.avg - y.avg).map((c) => h('li', { class: `critic-chip ${c.avg >= 8 ? 'good' : c.avg >= 6 ? 'mid' : 'bad'}`, id: `series-critic-${c.id}` }, h('span', { 'aria-hidden': 'true' }, `${c.icon} `), `${c.name} `, h('strong', null, String(c.avg)))))));
     if (j?.status === 'done' || j?.status === 'error') card.append(h('p', { class: j.error ? 'form-error' : 'hint', id: 'series-polish-last' }, j.error ? `Last run stopped: ${j.error}` : `Last run: ${j.message}`));
     const below = data.episodes.filter((e) => !(data.quality?.[e.no] >= TARGET_SCORE)).length;
     card.append(h('div', { class: 'toolbar' },

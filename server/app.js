@@ -15,6 +15,7 @@ import { extractJson, normalizeScript, analyzeScript, composeImagePrompt } from 
 import { guideMarkdown } from '../lib/domain/guide.js';
 import { vePackSeriesMarkdown, normalizeVeSettings } from '../lib/domain/vepack.js';
 import { hardChecks, normalizeReview, combineScore, TARGET_SCORE, MAX_ROUNDS, DEFAULT_ROUNDS } from '../lib/domain/quality.js';
+import { enabledCritics, normalizeCritics, normalizeCriticsOff, criticAverage, CRITICS } from '../lib/domain/critics.js';
 import { reviewerSystemPrompt, analyzePrompt, repairSystemPrompt, repairPrompt, POLISH_PROMPT_VERSION } from '../lib/domain/polishPrompts.js';
 import { costOf, priceFor, normalizePriceOverrides, estimateSeriesWrite, priceRange, PRICES_SOURCE } from '../lib/domain/pricing.js';
 import { normalizeSeriesSettings, validateSeriesSettings, normalizePlan, applyPlanEdits, planStats, normalizeEpisode, analyzeEpisode, layoutEpisode, seriesCsv, episodeMarkdown, SERIES_LIMITS } from '../lib/domain/series.js';
@@ -243,6 +244,7 @@ export function createApp(config = {}) {
     if (b.priceOverrides !== undefined) s.priceOverrides = normalizePriceOverrides(b.priceOverrides);
     if (b.briefDefaults !== undefined) s.briefDefaults = normalizeBrief(b.briefDefaults);
     if (b.ve !== undefined) s.ve = normalizeVeSettings(b.ve);
+    if (b.criticsOff !== undefined) s.criticsOff = normalizeCriticsOff(b.criticsOff);
     q.updSettings.run(JSON.stringify(s), req.user.id);
     res.json({ settings: s });
   });
@@ -370,7 +372,7 @@ export function createApp(config = {}) {
   const polishJobs = new Map(); // 'p:<projectId>' | 's:<seriesId>' → job
   const clampRounds = (n) => Math.max(0, Math.min(MAX_ROUNDS, Number.isFinite(Number(n)) ? Math.round(Number(n)) : DEFAULT_ROUNDS));
   const clampTarget = (n) => Math.max(50, Math.min(100, Number(n) || TARGET_SCORE));
-  async function polishScript(userId, provider, model, brief, script, { target, rounds, progress, cancelled }) {
+  async function polishScript(userId, provider, model, brief, script, { target, rounds, progress, cancelled, criticIds = [] }) {
     const usage = { input: 0, output: 0 };
     const history = [];
     const fakeReq = { user: { id: userId }, body: { provider, model } };
@@ -382,19 +384,22 @@ export function createApp(config = {}) {
     const evaluate = async (sc, round) => {
       const checks = hardChecks(sc, brief);
       progress({ round, phase: 'analyzing', message: round ? `Round ${round}: checking the repaired script…` : 'Reading and scoring the script…' });
-      const r = await call('analyze', reviewerSystemPrompt(), analyzePrompt(sc, brief, checks));
-      const review = normalizeReview(extractJson(r.text));
-      const { score, capped } = combineScore(review, checks, target);
-      const entry = { round, score, capped, ai: review.ai, checks: checks.score, scores: review.scores, summary: review.summary, issues: review.issues, failed: checks.failed.map((c) => ({ label: c.label, detail: c.detail })) };
+      if (criticIds.length) progress({ round, phase: 'analyzing', message: `${round ? `Round ${round}: ` : ''}scoring + ${criticIds.length} critics auditing…` });
+      const r = await call('analyze', reviewerSystemPrompt(), analyzePrompt(sc, brief, checks, criticIds));
+      const raw = extractJson(r.text);
+      const review = normalizeReview(raw);
+      const critics = criticIds.length ? normalizeCritics(raw?.critics, criticIds) : [];
+      const { score, capped, reason } = combineScore(review, checks, target, critics.length ? critics : null);
+      const entry = { round, score, capped, reason, critics, criticAvg: criticAverage(critics), ai: review.ai, checks: checks.score, scores: review.scores, summary: review.summary, issues: review.issues, failed: checks.failed.map((c) => ({ label: c.label, detail: c.detail })) };
       history.push(entry);
       progress({ round, phase: 'scored', score, message: `${round ? `Round ${round}` : 'First read'}: ${score}/100` });
-      return { entry, review, checks };
+      return { entry, review, checks, critics };
     };
     let best = { script, ev: await evaluate(script, 0) };
     for (let i = 1; i <= rounds && best.ev.entry.score < target; i++) {
       if (cancelled()) break;
       progress({ round: i, phase: 'repairing', message: `Round ${i}: repairing ${best.ev.review.issues.length || 'the weakest'} issue${best.ev.review.issues.length === 1 ? '' : 's'}…` });
-      const r = await call('repair', repairSystemPrompt(), repairPrompt(best.script, brief, best.ev.review, best.ev.checks));
+      const r = await call('repair', repairSystemPrompt(), repairPrompt(best.script, brief, best.ev.review, best.ev.checks, best.ev.critics));
       let next;
       try { next = normalizeScript(extractJson(r.text), brief); } catch { continue; }
       if (!next.clips.length) continue;
@@ -413,7 +418,9 @@ export function createApp(config = {}) {
   const qualityMeta = (out, model, target) => ({ score: out.score, target, reached: out.reached, bestRound: out.bestRound, rounds: out.history.length - 1, model, at: new Date().toISOString(),
     scores: out.history.find((h) => h.round === out.bestRound)?.scores, summary: out.history.find((h) => h.round === out.bestRound)?.summary,
     issues: out.history.find((h) => h.round === out.bestRound)?.issues || [], failed: out.history.find((h) => h.round === out.bestRound)?.failed || [],
-    history: out.history.map(({ round, score, capped }) => ({ round, score, capped })) });
+    critics: out.history.find((h) => h.round === out.bestRound)?.critics || [], criticAvg: out.history.find((h) => h.round === out.bestRound)?.criticAvg ?? null,
+    reason: out.history.find((h) => h.round === out.bestRound)?.reason || '',
+    history: out.history.map(({ round, score, capped, criticAvg }) => ({ round, score, capped, criticAvg })) });
   const jobOut = (j) => j && { status: j.status, phase: j.phase, round: j.round, message: j.message, log: j.log.slice(-40), error: j.error, result: j.result, done: j.done, total: j.total, current: j.current, startedAt: j.startedAt };
   const newJob = (extra = {}) => ({ status: 'running', phase: 'starting', round: 0, message: 'Starting…', log: [], cancel: false, startedAt: new Date().toISOString(), ...extra });
   const jobProgress = (job, prefix = '') => (p) => { Object.assign(job, { phase: p.phase, round: p.round, message: prefix + p.message }); if (p.phase === 'scored' || p.phase === 'repairing') job.log.push(prefix + p.message); };
@@ -424,7 +431,8 @@ export function createApp(config = {}) {
     const script = normalizeScript(JSON.parse(p.script), brief);
     const oldMeta = JSON.parse(p.meta || '{}');
     const scoreBrief = extraSource && !brief.sourceData ? { ...brief, sourceData: extraSource } : brief;
-    return polishScript(userId, provider, model, scoreBrief, script, { target, rounds, progress: jobProgress(job, prefix), cancelled: () => job.cancel }).then((out) => {
+    const criticIds = enabledCritics(settingsOf(q.userById.get(userId) || {}));
+    return polishScript(userId, provider, model, scoreBrief, script, { target, rounds, criticIds, progress: jobProgress(job, prefix), cancelled: () => job.cancel }).then((out) => {
       const fresh = normalizeScript(out.script, brief);
       fresh.buildProgress = script.buildProgress || {};
       const meta = { ...oldMeta, quality: qualityMeta(out, model, target), usage: { input: (oldMeta.usage?.input || 0) + out.usage.input, output: (oldMeta.usage?.output || 0) + out.usage.output } };
@@ -689,7 +697,9 @@ export function createApp(config = {}) {
     };
     const quality = Object.fromEntries(q.episodesOf.all(ser.id, req.user.id).map((p) => [p.episode_no, JSON.parse(p.meta || '{}').quality?.score ?? null]));
     const pj = polishJobs.get(`s:${ser.id}`);
-    res.json({ series: seriesOut(ser, true), episodes, running: running.has(ser.id), cost, quality, polish: jobOut(pj) || null });
+    const cm = q.episodesOf.all(ser.id, req.user.id).map((p) => JSON.parse(p.meta || '{}').quality?.critics || []).filter((c) => c.length);
+    const criticAvgs = cm.length ? CRITICS.map((c) => { const xs = cm.flatMap((l) => l.filter((x) => x.id === c.id).map((x) => x.score)); return xs.length ? { id: c.id, name: c.name, icon: c.icon, avg: Math.round((xs.reduce((a, b) => a + b, 0) / xs.length) * 10) / 10, n: xs.length } : null; }).filter(Boolean) : [];
+    res.json({ series: seriesOut(ser, true), episodes, running: running.has(ser.id), cost, quality, criticAvgs, polish: jobOut(pj) || null });
   });
   // Edit plan: include/exclude, length, title. Only while not writing.
   app.put('/api/series/:id/plan', requireAuth, writeLimiter, (req, res) => {

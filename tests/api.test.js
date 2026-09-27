@@ -365,6 +365,8 @@ test('series: dump → analyze → plan edit → write → episodes as projects 
   assert.equal(d.polish.status, 'done', d.polish.error);
   assert.equal(d.polish.done, d.episodes.length);
   for (const e of d.episodes) assert.ok(d.quality[e.no] >= 95, `episode ${e.no} scored ${d.quality[e.no]}`);
+  assert.equal(d.criticAvgs.length, 10, 'per-critic averages across episodes');
+  assert.ok(d.criticAvgs.every((c) => c.avg >= 9 && c.n === d.episodes.length));
   const pe = (await a.call(`/api/projects/${ep1.projectId}`)).data.project;
   assert.equal(pe.brief.layout, 'narration', 'layout kept');
   assert.equal(pe.meta.quality.rounds, 1);
@@ -444,6 +446,10 @@ test('polish loop: analyze → repair → analyze reaches 95+, keeps the best ve
   assert.ok(d.quality.score < 95 && d.quality.score > 60, `first read ${d.quality.score}`);
   assert.equal(d.quality.rounds, 0);
   assert.ok(d.quality.issues.length > 0);
+  assert.equal(d.quality.critics.length, 10, 'full critic panel by default');
+  assert.ok(d.quality.critics.every((c) => c.name && c.verdict && c.score >= 0 && c.score <= 10));
+  assert.ok(d.quality.critics.some((c) => c.score < 6), 'demo: one critic blocks');
+  assert.ok(d.quality.criticAvg > 0);
   let p = (await a.call(`/api/projects/${id}`)).data.project;
   assert.deepEqual(p.script.clips.map((c) => c.imagePrompt), before.clips.map((c) => c.imagePrompt), 'score-only changes nothing');
   // polish: one repair gets it to 95+
@@ -454,6 +460,7 @@ test('polish loop: analyze → repair → analyze reaches 95+, keeps the best ve
   assert.ok(d.quality.score >= 95, `polished ${d.quality.score}`);
   assert.equal(d.quality.reached, true);
   assert.deepEqual(d.quality.history.map((h) => h.round), [0, 1]);
+  assert.ok(d.quality.critics.every((c) => c.score >= 9), 'critics satisfied after repair');
   assert.ok(d.job.log.length >= 2);
   p = (await a.call(`/api/projects/${id}`)).data.project;
   assert.equal(p.script.clips.length, 4, 'clip count kept');
@@ -469,4 +476,14 @@ test('polish loop: analyze → repair → analyze reaches 95+, keeps the best ve
   await b.call('/api/auth/register', { method: 'POST', body: { email: 'polish-b@example.com', password: 'correct-horse-battery' } });
   assert.equal((await b.call(`/api/projects/${id}/polish`)).status, 404);
   assert.equal((await b.call(`/api/projects/${id}/polish`, { method: 'POST', body: { provider: 'demo', model: 'demo-writer' } })).status, 404);
+  // switching critics off: only the enabled ones audit; bad ids ignored; can't switch all off
+  r = await a.call('/api/settings', { method: 'PUT', body: { criticsOff: ['safety', 'access', 'nope'] } });
+  assert.deepEqual(r.data.settings.criticsOff, ['safety', 'access']);
+  r = await a.call(`/api/projects/${id}/polish`, { method: 'POST', body: { provider: 'demo', model: 'demo-writer', rounds: 0 } });
+  d = await until();
+  assert.equal(d.quality.critics.length, 8);
+  assert.ok(!d.quality.critics.some((c) => c.id === 'safety'));
+  r = await a.call('/api/settings', { method: 'PUT', body: { criticsOff: ['scroller', 'audience', 'factcheck', 'director', 'prompteng', 'voice', 'continuity', 'story', 'safety', 'access'] } });
+  assert.equal(r.data.settings.criticsOff.length, 9, 'at least one critic stays on');
+  await a.call('/api/settings', { method: 'PUT', body: { criticsOff: [] } });
 });
