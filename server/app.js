@@ -14,6 +14,8 @@ import { normalizeBrief, validateBrief, wordBudgetFor } from '../lib/domain/proj
 import { extractJson, normalizeScript, analyzeScript, composeImagePrompt } from '../lib/domain/script.js';
 import { guideMarkdown } from '../lib/domain/guide.js';
 import { vePackSeriesMarkdown, normalizeVeSettings } from '../lib/domain/vepack.js';
+import { hardChecks, normalizeReview, combineScore, TARGET_SCORE, MAX_ROUNDS, DEFAULT_ROUNDS } from '../lib/domain/quality.js';
+import { reviewerSystemPrompt, analyzePrompt, repairSystemPrompt, repairPrompt, POLISH_PROMPT_VERSION } from '../lib/domain/polishPrompts.js';
 import { costOf, priceFor, normalizePriceOverrides, estimateSeriesWrite, priceRange, PRICES_SOURCE } from '../lib/domain/pricing.js';
 import { normalizeSeriesSettings, validateSeriesSettings, normalizePlan, applyPlanEdits, planStats, normalizeEpisode, analyzeEpisode, layoutEpisode, seriesCsv, episodeMarkdown, SERIES_LIMITS } from '../lib/domain/series.js';
 import { seriesSystemPrompt, extractPrompt, planPrompt, episodePrompt, SERIES_PROMPT_VERSION } from '../lib/domain/seriesPrompts.js';
@@ -362,6 +364,104 @@ export function createApp(config = {}) {
   // Faceless reels never carry characters (the model is told so; this enforces it).
   const facelessGuard = (script) => ({ ...script, styleSheet: { ...script.styleSheet, characters: [] }, clips: script.clips.map((c) => ({ ...c, dialogue: c.dialogue.map((l) => ({ ...l, speaker: 'Narrator' })) })) });
 
+  // ---------------- Quality loop: Analyze → Repair → Analyze until the target score ----------------
+  // Score = 80% AI rubric (user's own key/model) + 20% hard checks computed in code; a failed hard check caps it below target.
+  // The best-scoring version is always kept, so polishing can never make a script worse.
+  const polishJobs = new Map(); // 'p:<projectId>' | 's:<seriesId>' → job
+  const clampRounds = (n) => Math.max(0, Math.min(MAX_ROUNDS, Number.isFinite(Number(n)) ? Math.round(Number(n)) : DEFAULT_ROUNDS));
+  const clampTarget = (n) => Math.max(50, Math.min(100, Number(n) || TARGET_SCORE));
+  async function polishScript(userId, provider, model, brief, script, { target, rounds, progress, cancelled }) {
+    const usage = { input: 0, output: 0 };
+    const history = [];
+    const fakeReq = { user: { id: userId }, body: { provider, model } };
+    const call = async (action, system, user) => {
+      const r = await callModelAs(userId, provider, model, action, system, user, POLISH_PROMPT_VERSION);
+      usage.input += r.usage.input; usage.output += r.usage.output;
+      return r;
+    };
+    const evaluate = async (sc, round) => {
+      const checks = hardChecks(sc, brief);
+      progress({ round, phase: 'analyzing', message: round ? `Round ${round}: checking the repaired script…` : 'Reading and scoring the script…' });
+      const r = await call('analyze', reviewerSystemPrompt(), analyzePrompt(sc, brief, checks));
+      const review = normalizeReview(extractJson(r.text));
+      const { score, capped } = combineScore(review, checks, target);
+      const entry = { round, score, capped, ai: review.ai, checks: checks.score, scores: review.scores, summary: review.summary, issues: review.issues, failed: checks.failed.map((c) => ({ label: c.label, detail: c.detail })) };
+      history.push(entry);
+      progress({ round, phase: 'scored', score, message: `${round ? `Round ${round}` : 'First read'}: ${score}/100` });
+      return { entry, review, checks };
+    };
+    let best = { script, ev: await evaluate(script, 0) };
+    for (let i = 1; i <= rounds && best.ev.entry.score < target; i++) {
+      if (cancelled()) break;
+      progress({ round: i, phase: 'repairing', message: `Round ${i}: repairing ${best.ev.review.issues.length || 'the weakest'} issue${best.ev.review.issues.length === 1 ? '' : 's'}…` });
+      const r = await call('repair', repairSystemPrompt(), repairPrompt(best.script, brief, best.ev.review, best.ev.checks));
+      let next;
+      try { next = normalizeScript(extractJson(r.text), brief); } catch { continue; }
+      if (!next.clips.length) continue;
+      if (brief.mode === 'reel') next = facelessGuard(next);
+      next.buildProgress = best.script.buildProgress || {};
+      if (brief.layout === 'narration') { next.caption ||= best.script.caption || ''; if (!next.hashtags?.length) next.hashtags = best.script.hashtags || []; }
+      const fm = { usage: { input: 0, output: 0 } };
+      ({ script: next } = await fitDialogue(fakeReq, next, brief, fm));
+      usage.input += fm.usage.input; usage.output += fm.usage.output;
+      if (cancelled()) break;
+      const ev = await evaluate(next, i);
+      if (ev.entry.score > best.ev.entry.score) best = { script: next, ev };
+    }
+    return { script: best.script, score: best.ev.entry.score, bestRound: best.ev.entry.round, reached: best.ev.entry.score >= target, history, usage };
+  }
+  const qualityMeta = (out, model, target) => ({ score: out.score, target, reached: out.reached, bestRound: out.bestRound, rounds: out.history.length - 1, model, at: new Date().toISOString(),
+    scores: out.history.find((h) => h.round === out.bestRound)?.scores, summary: out.history.find((h) => h.round === out.bestRound)?.summary,
+    issues: out.history.find((h) => h.round === out.bestRound)?.issues || [], failed: out.history.find((h) => h.round === out.bestRound)?.failed || [],
+    history: out.history.map(({ round, score, capped }) => ({ round, score, capped })) });
+  const jobOut = (j) => j && { status: j.status, phase: j.phase, round: j.round, message: j.message, log: j.log.slice(-40), error: j.error, result: j.result, done: j.done, total: j.total, current: j.current, startedAt: j.startedAt };
+  const newJob = (extra = {}) => ({ status: 'running', phase: 'starting', round: 0, message: 'Starting…', log: [], cancel: false, startedAt: new Date().toISOString(), ...extra });
+  const jobProgress = (job, prefix = '') => (p) => { Object.assign(job, { phase: p.phase, round: p.round, message: prefix + p.message }); if (p.phase === 'scored' || p.phase === 'repairing') job.log.push(prefix + p.message); };
+  function polishProject(userId, projectId, provider, model, target, rounds, job, prefix = '', extraSource = '') {
+    const p = q.project.get(projectId, userId);
+    if (!p || !p.script) throw new LlmError('Project not found', 404, 'not_found');
+    const brief = normalizeBrief(JSON.parse(p.brief));
+    const script = normalizeScript(JSON.parse(p.script), brief);
+    const oldMeta = JSON.parse(p.meta || '{}');
+    const scoreBrief = extraSource && !brief.sourceData ? { ...brief, sourceData: extraSource } : brief;
+    return polishScript(userId, provider, model, scoreBrief, script, { target, rounds, progress: jobProgress(job, prefix), cancelled: () => job.cancel }).then((out) => {
+      const fresh = normalizeScript(out.script, brief);
+      fresh.buildProgress = script.buildProgress || {};
+      const meta = { ...oldMeta, quality: qualityMeta(out, model, target), usage: { input: (oldMeta.usage?.input || 0) + out.usage.input, output: (oldMeta.usage?.output || 0) + out.usage.output } };
+      q.updProject.run(fresh.title || p.title, JSON.stringify(brief), JSON.stringify(fresh), JSON.stringify(meta), projectId, userId);
+      return { out, meta };
+    });
+  }
+  app.post('/api/projects/:id/polish', requireAuth, llmLimiter, (req, res, next) => {
+    try {
+      const id = Number(req.params.id);
+      const p = q.project.get(id, req.user.id);
+      if (!p || !p.script) return res.status(404).json({ error: 'Save the project with a script first.' });
+      const key = `p:${id}`;
+      if (polishJobs.get(key)?.status === 'running') return res.status(409).json({ error: 'This script is already being polished.' });
+      const provider = String(req.body?.provider || ''), model = String(req.body?.model || '');
+      checkModelChoice(provider, model); checkCap(req.user.id); credentialsFor(req.user.id, provider);
+      const target = clampTarget(req.body?.target), rounds = clampRounds(req.body?.rounds);
+      const job = newJob({ target, rounds });
+      polishJobs.set(key, job);
+      polishProject(req.user.id, id, provider, model, target, rounds, job)
+        .then(({ out, meta }) => { Object.assign(job, { status: 'done', phase: 'done', message: out.reached ? `Done: ${out.score}/100` : `Best score ${out.score}/100 after ${out.history.length - 1} repair round${out.history.length === 2 ? '' : 's'}`, result: { score: out.score, reached: out.reached, usage: out.usage, quality: meta.quality } }); })
+        .catch((e) => { Object.assign(job, { status: 'error', phase: 'error', error: e.message || 'Polishing failed' }); });
+      res.status(202).json({ job: jobOut(job) });
+    } catch (e) { next(e); }
+  });
+  app.get('/api/projects/:id/polish', requireAuth, (req, res) => {
+    const id = Number(req.params.id);
+    const p = q.project.get(id, req.user.id);
+    if (!p) return res.status(404).json({ error: 'Project not found' });
+    res.json({ job: jobOut(polishJobs.get(`p:${id}`)) || null, quality: JSON.parse(p.meta || '{}').quality || null });
+  });
+  app.post('/api/projects/:id/polish/cancel', requireAuth, writeLimiter, (req, res) => {
+    const j = polishJobs.get(`p:${Number(req.params.id)}`);
+    if (j && q.project.get(Number(req.params.id), req.user.id)) j.cancel = true;
+    res.json({ ok: true, stopping: !!j });
+  });
+
   app.post('/api/generate', requireAuth, llmLimiter, async (req, res, next) => {
     try {
       const brief = normalizeBrief(req.body?.brief);
@@ -587,7 +687,9 @@ export function createApp(config = {}) {
       remaining: remaining ? { episodes: remaining.episodes, tokens: remaining.input + remaining.output, range: priceRange(ser.model, remaining, ov), basedOn: actualAvg ? `average of ${written.length} written episode${written.length > 1 ? 's' : ''}` : 'estimate' } : null,
       priced: !!priceFor(ser.model, ov),
     };
-    res.json({ series: seriesOut(ser, true), episodes, running: running.has(ser.id), cost });
+    const quality = Object.fromEntries(q.episodesOf.all(ser.id, req.user.id).map((p) => [p.episode_no, JSON.parse(p.meta || '{}').quality?.score ?? null]));
+    const pj = polishJobs.get(`s:${ser.id}`);
+    res.json({ series: seriesOut(ser, true), episodes, running: running.has(ser.id), cost, quality, polish: jobOut(pj) || null });
   });
   // Edit plan: include/exclude, length, title. Only while not writing.
   app.put('/api/series/:id/plan', requireAuth, writeLimiter, (req, res) => {
@@ -617,6 +719,49 @@ export function createApp(config = {}) {
       startJob(ser.id, 'write');
       res.status(202).json({ series: seriesOut(ser), queued: n });
     } catch (e) { next(e); }
+  });
+  // Polish every written episode (optionally only those below the target), one at a time.
+  app.post('/api/series/:id/polish', requireAuth, seriesLimiter, (req, res, next) => {
+    try {
+      const ser = getSeries(req, res); if (!ser) return;
+      const key = `s:${ser.id}`;
+      if (running.has(ser.id)) return res.status(409).json({ error: 'Wait until the episodes are written.' });
+      if (polishJobs.get(key)?.status === 'running') return res.status(409).json({ error: 'This series is already being polished.' });
+      const provider = String(req.body?.provider || ser.provider), model = String(req.body?.model || ser.model);
+      checkModelChoice(provider, model); checkCap(req.user.id); credentialsFor(req.user.id, provider);
+      const target = clampTarget(req.body?.target), rounds = clampRounds(req.body?.rounds);
+      const onlyBelow = req.body?.onlyBelow !== false;
+      const eps = q.episodesOf.all(ser.id, req.user.id).filter((p) => p.script && (!onlyBelow || !((JSON.parse(p.meta || '{}').quality?.score ?? 0) >= target)));
+      if (!eps.length) return res.status(409).json({ error: onlyBelow ? `Every episode already scores ${target}+.` : 'No episodes written yet.' });
+      const job = newJob({ target, rounds, done: 0, total: eps.length, results: [] });
+      polishJobs.set(key, job);
+      const userId = req.user.id, source = ser.settings.brief.sourceData || '';
+      (async () => {
+        for (const p of eps) {
+          if (job.cancel) break;
+          job.current = p.episode_no;
+          try {
+            const { out } = await polishProject(userId, p.id, provider, model, target, rounds, job, `Episode ${p.episode_no} · `, source);
+            job.results.push({ no: p.episode_no, score: out.score, reached: out.reached });
+            job.log.push(`Episode ${p.episode_no}: ${out.score}/100${out.reached ? ' ✓' : ''}`);
+            saveSeries(ser, { usageIn: out.usage.input, usageOut: out.usage.output });
+          } catch (e) {
+            job.results.push({ no: p.episode_no, error: e.message });
+            job.log.push(`Episode ${p.episode_no}: ${e.message}`);
+            if (e.status === 401 || e.status === 429) { job.error = e.message; break; }
+          }
+          job.done++;
+        }
+        const ok = job.results.filter((r) => r.reached).length;
+        Object.assign(job, { status: job.error ? 'error' : 'done', phase: 'done', current: null, message: `${job.cancel ? 'Stopped. ' : ''}${ok} of ${job.results.length} episode${job.results.length === 1 ? '' : 's'} at ${target}+`, result: { results: job.results } });
+      })();
+      res.status(202).json({ job: jobOut(job) });
+    } catch (e) { next(e); }
+  });
+  app.post('/api/series/:id/polish/cancel', requireAuth, writeLimiter, (req, res) => {
+    const ser = getSeries(req, res); if (!ser) return;
+    const j = polishJobs.get(`s:${ser.id}`); if (j) j.cancel = true;
+    res.json({ ok: true, stopping: !!j });
   });
   app.post('/api/series/:id/pause', requireAuth, writeLimiter, (req, res) => {
     const ser = getSeries(req, res); if (!ser) return;

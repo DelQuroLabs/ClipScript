@@ -111,3 +111,6 @@ Each box has its own Copy button. The pack also includes:
 - character reference pictures for **Use Consistent Character**.
 
 The Series page can copy or download the whole series as one pack.
+
+## Polish to 95+ (script quality loop)
+Open a script and use **Script quality → Polish to 95+**. The AI (your key and model) grades the script on 8 areas, fixes what it finds, then grades it again, for up to 3 rounds. It stops at 95 and always keeps the best version. **Score only** grades without changing anything. On a series page, **Polish N episodes to 95+** does every written episode below 95, one at a time, and shows a Score column in the plan. Each round costs about 2 AI calls.

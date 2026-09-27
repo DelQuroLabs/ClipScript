@@ -234,6 +234,24 @@ try {
     step('reels: every clip within the word budget', rs.every((x) => x === 'ok' || x === 'tight' || x === 'none' || x === undefined), rs.join(','));
     step('reels: style sheet has no characters', (await page.locator('[id^="ch-name-"]').count()) === 0);
     results.axe.reels = (await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']).analyze()).violations;
+    // Quality loop: Score only, then Polish to 95+
+    step('polish: quality card offers Polish to 95+ and Score only', await vis(page.locator('#polish-btn')) && await vis(page.locator('#score-btn')));
+    const imgBefore = await page.locator('textarea[id$="-img"]').first().inputValue();
+    await page.locator('#score-btn').click();
+    await page.locator('#quality-score').waitFor({ timeout: 15000 });
+    const s0 = Number(await page.locator('#quality-score strong').textContent());
+    step('polish: Score only grades the script without changing it', s0 > 50 && s0 < 95 && (await page.locator('textarea[id$="-img"]').first().inputValue()) === imgBefore, `score ${s0}`);
+    step('polish: breakdown shows 8 rubric bars and editor notes', (await page.locator('.q-bars li').count()) === 8 && await vis(page.locator('#quality-issues')));
+    await page.locator('#polish-btn').click();
+    const sawRun = await page.locator('#polish-run').waitFor({ timeout: 3000 }).then(() => true).catch(() => false);
+    await page.locator('#quality-history').waitFor({ timeout: 20000 });
+    const s1 = Number(await page.locator('#quality-score strong').textContent());
+    step('polish: live progress shown, then Analyze → Repair → Analyze reaches 95+', sawRun && s1 >= 95, `score ${s0} → ${s1}; history: ${await page.locator('#quality-history').textContent()}`);
+    step('polish: repaired script loaded into the editor, clip count kept', (await page.locator('textarea[id$="-img"]').first().inputValue()) !== imgBefore && (await page.locator('article.clip').count()) === expected);
+    step('polish: Quality stat shown in the script header', /\d+\/100/.test(await page.locator('.stat', { hasText: 'Quality' }).textContent()));
+    await page.locator('#quality-issues summary').click().catch(() => {});
+    await page.locator('section.quality').screenshot({ path: `${OUT}/polish-card.png` });
+    results.axe.polish = (await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']).analyze()).violations;
     await page.screenshot({ path: `${OUT}/reels-1280-light.png` });
     // VideoExpress paste pack (Create Video From Prompt) for the reel
     await page.getByRole('tab', { name: 'VideoExpress paste pack' }).click();
@@ -386,6 +404,15 @@ try {
     await page.screenshot({ path: `${OUT}/series-episode-1280.png` });
     await page.getByRole('link', { name: /Series · episode 1/ }).click();
     step('series: back link returns to the series', await vis(page.getByRole('heading', { name: 'Episode plan' })));
+    step('series polish: Score column in the plan and a polish button', await vis(page.getByRole('columnheader', { name: 'Score' })) && await vis(page.locator('#series-polish')));
+    await page.locator('#series-polish').click();
+    const sawSeriesRun = await Promise.any([page.locator('#series-polish-msg').waitFor({ timeout: 8000 }), page.locator('#toast').filter({ hasText: /Polish finished/ }).waitFor({ timeout: 8000 })]).then(() => true).catch(() => false);
+    await page.locator('#series-quality').waitFor({ timeout: 60000 });
+    const chips = await page.locator('[id^="ep-score-"]').allTextContents();
+    step('series polish: every written episode reaches 95+ with a score badge', sawSeriesRun && chips.length === written && chips.every((x) => Number(x) >= 95), `${chips.join(',')} · ${chips.length}/${written} episodes · progress seen: ${sawSeriesRun}`);
+    step('series polish: button now says all episodes are at 95+', await page.locator('#series-polish').isDisabled() && /All episodes at 95\+/.test(await page.locator('#series-polish').textContent()));
+    await page.locator('section.quality').screenshot({ path: `${OUT}/series-polish-card.png` });
+    results.axe.seriesPolish = (await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']).analyze()).violations;
     const c = await browser.newContext({ viewport: { width: 320, height: 720 }, storageState: await ctx.storageState() });
     const p = await c.newPage(); await p.goto(`${BASE}/#/series`); await p.locator('#series-source').waitFor();
     const of = await p.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);

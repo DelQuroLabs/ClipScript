@@ -357,6 +357,20 @@ test('series: dump → analyze → plan edit → write → episodes as projects 
   assert.equal(r.status, 202);
   d = await until((x) => !x.running && x.series.status !== 'writing');
   assert.equal(d.episodes.find((e) => e.no === 1).projectId, ep1.projectId, 'rewrite updates the same project');
+  // polish the whole series: every written episode reaches 95+, scores show in the series view
+  r = await a.call(`/api/series/${id}/polish`, { method: 'POST', body: { rounds: 2 } });
+  assert.equal(r.status, 202, JSON.stringify(r.data));
+  assert.equal(r.data.job.total, d.episodes.length);
+  d = await until((x) => x.polish && x.polish.status !== 'running');
+  assert.equal(d.polish.status, 'done', d.polish.error);
+  assert.equal(d.polish.done, d.episodes.length);
+  for (const e of d.episodes) assert.ok(d.quality[e.no] >= 95, `episode ${e.no} scored ${d.quality[e.no]}`);
+  const pe = (await a.call(`/api/projects/${ep1.projectId}`)).data.project;
+  assert.equal(pe.brief.layout, 'narration', 'layout kept');
+  assert.equal(pe.meta.quality.rounds, 1);
+  assert.deepEqual(pe.script.clips.map((c) => c.dialogue.map((l) => l.line).join(' ')).join(' ').split(/\s+/), p.script.narration.split(/\s+/), 'narration untouched by repair');
+  r = await a.call(`/api/series/${id}/polish`, { method: 'POST', body: {} });
+  assert.equal(r.status, 409, 'nothing left below target');
   // exports
   const csv = await a.raw(`/api/series/${id}/export?format=csv`);
   assert.equal(csv.status, 200); assert.match(csv.headers.get('content-type'), /text\/csv/);
@@ -410,4 +424,49 @@ test('cost estimates: usage report prices gpt-5.6-luna, user price overrides, se
   assert.equal(d.cost.remaining.episodes, d.series.plan.episodes.length);
   assert.ok(d.cost.remaining.range.hi >= d.cost.remaining.range.lo);
   assert.equal(d.cost.remaining.basedOn, 'estimate');
+});
+
+test('polish loop: analyze → repair → analyze reaches 95+, keeps the best version, score-only, errors', async () => {
+  const a = client();
+  await a.call('/api/auth/register', { method: 'POST', body: { email: 'polish@example.com', password: 'correct-horse-battery' } });
+  const sourceData = 'Honeybees visit about two million flowers to make one pound of honey. A single bee makes about one twelfth of a teaspoon in its life. Bees communicate with a waggle dance that points to food. A colony can hold sixty thousand bees in summer.';
+  const brief = { mode: 'reel', sourceData, clipCount: 4, clipSeconds: 6, dialogueMode: 'voiceover', aspectRatio: '9:16', title: 'Bees' };
+  let r = await a.call('/api/generate', { method: 'POST', body: { brief, provider: 'demo', model: 'demo-writer' } });
+  assert.equal(r.status, 200);
+  const id = r.data.project.id;
+  const until = async () => { for (let i = 0; i < 200; i++) { const x = await a.call(`/api/projects/${id}/polish`); if (x.data.job && x.data.job.status !== 'running') return x.data; await new Promise((res) => setTimeout(res, 25)); } throw new Error('timeout'); };
+  // score only (rounds 0): no changes, score below target
+  const before = (await a.call(`/api/projects/${id}`)).data.project.script;
+  r = await a.call(`/api/projects/${id}/polish`, { method: 'POST', body: { provider: 'demo', model: 'demo-writer', rounds: 0 } });
+  assert.equal(r.status, 202, JSON.stringify(r.data));
+  let d = await until();
+  assert.equal(d.job.status, 'done', d.job.error);
+  assert.ok(d.quality.score < 95 && d.quality.score > 60, `first read ${d.quality.score}`);
+  assert.equal(d.quality.rounds, 0);
+  assert.ok(d.quality.issues.length > 0);
+  let p = (await a.call(`/api/projects/${id}`)).data.project;
+  assert.deepEqual(p.script.clips.map((c) => c.imagePrompt), before.clips.map((c) => c.imagePrompt), 'score-only changes nothing');
+  // polish: one repair gets it to 95+
+  r = await a.call(`/api/projects/${id}/polish`, { method: 'POST', body: { provider: 'demo', model: 'demo-writer' } });
+  assert.equal(r.status, 202);
+  d = await until();
+  assert.equal(d.job.status, 'done', d.job.error);
+  assert.ok(d.quality.score >= 95, `polished ${d.quality.score}`);
+  assert.equal(d.quality.reached, true);
+  assert.deepEqual(d.quality.history.map((h) => h.round), [0, 1]);
+  assert.ok(d.job.log.length >= 2);
+  p = (await a.call(`/api/projects/${id}`)).data.project;
+  assert.equal(p.script.clips.length, 4, 'clip count kept');
+  assert.deepEqual(p.script.styleSheet.characters, [], 'still faceless');
+  assert.ok(p.script.clips.every((c) => /polished/.test(c.imagePrompt)), 'repair saved');
+  assert.equal(p.meta.quality.score, d.quality.score);
+  assert.ok(p.meta.usage.output > 0);
+  // errors: unknown project, missing key, other users
+  assert.equal((await a.call('/api/projects/999999/polish', { method: 'POST', body: { provider: 'demo', model: 'demo-writer' } })).status, 404);
+  r = await a.call(`/api/projects/${id}/polish`, { method: 'POST', body: { provider: 'openai', model: 'gpt-5.6-sol' } });
+  assert.ok(r.status >= 400 && r.status < 500 && /key/i.test(r.data.error), JSON.stringify(r.data));
+  const b = client();
+  await b.call('/api/auth/register', { method: 'POST', body: { email: 'polish-b@example.com', password: 'correct-horse-battery' } });
+  assert.equal((await b.call(`/api/projects/${id}/polish`)).status, 404);
+  assert.equal((await b.call(`/api/projects/${id}/polish`, { method: 'POST', body: { provider: 'demo', model: 'demo-writer' } })).status, 404);
 });

@@ -75,3 +75,18 @@
   - Project / Reel / episode: a "VideoExpress paste pack" tab.
   - Series: an export group (Copy / Download / View) using `?format=vepack`.
 - **Evidence:** unit 71/71 (vepack 7), API 15/15, E2E 104/104 (12 new vepack steps, axe clean).
+
+## D-015 · Script quality loop ("Polish to 95+")
+- **Ask:** one button that reads and grades a script, then loops Analyze → Repair → Analyze until the script scores 95+/100. It works on Reel/Studio projects and whole series, using the user's own API key.
+- **Score (out of 100):** 80% AI rubric + 20% hard checks computed in code (`lib/domain/quality.js`).
+  - Rubric: hook 12, story 14, accuracy 14, spoken words 14, image prompts 16, motion 12, consistency 10, VideoExpress-ready 8.
+  - Hard checks: words fit every clip, exact clip count, full image/motion prompts, spoken words present, no cut-off sentences, faceless rules or fixed character looks, at most 2 reference characters.
+  - Any failed hard check caps the score at target − 5, so 95+ always means "fits and nothing is cut off".
+  - The AI's total is never trusted: each area is clamped and the total is recomputed.
+- **Loop:** up to 3 repair rounds (0 = score only), and it stops at 95.
+  - Every repair goes back through normalizeScript → facelessGuard (reels) → fitDialogue, which keeps the cut-off protection.
+  - **The best-scoring version is always kept**, so polishing can never make a script worse.
+- **Runs:** as an in-memory background job with live progress and a Stop button.
+  - Series runs one episode at a time and by default only polishes episodes below 95. It is blocked while a series write is running.
+  - The result is saved in `meta.quality` (score, per-area scores, remaining issues, history), and token usage is added to the project/series.
+- **Evidence:** unit 78/78 (quality 7), API 16/16 (polish project + series), E2E 115/115 (11 new steps, axe clean).

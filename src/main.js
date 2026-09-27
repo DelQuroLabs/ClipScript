@@ -7,6 +7,7 @@ import { clipFit, clipLimits, analyzeScript, composeImagePrompt, composeLastFram
 import { seriesView, stopSeriesPoll } from './series.js';
 import { buildGuide, guideProgress, guideMarkdown } from '../lib/domain/guide.js';
 import { costOf, formatUsd, priceFor, priceKey } from '../lib/domain/pricing.js';
+import { RUBRIC, scoreLabel, TARGET_SCORE } from '../lib/domain/quality.js';
 import { buildVePack, vePackMarkdown, normalizeVeSettings, VE_LIMITS, VE_VOICE_TABS, VE_IMAGE_TYPES } from '../lib/domain/vepack.js';
 
 const VE_URL = 'https://app.videoexpress.ai';
@@ -67,6 +68,7 @@ function render() {
   app.append(header(r));
   const main = h('main', { id: 'main', tabindex: '-1' });
   if (r !== 'series') stopSeriesPoll();
+  if (state.busy === 'polish' && (routeId() !== state.polish?.id || !['studio', 'reels'].includes(r))) { stopPolishPoll(); state.busy = null; }
   if (r === 'series') main.append(seriesView({ state, modelPicker, currentModel, openProject, go }, Number(location.hash.split('/')[2]) || null));
   else if (r === 'settings') main.append(settingsView());
   else if (r === 'projects') main.append(projectsView());
@@ -82,7 +84,7 @@ function render() {
           const nb = normalizeBrief(project.brief); ensureMode(nb.mode); state.project = project; state.brief = nb; state.error = null;
           state._opening = null;
           const sec = nb.mode === 'reel' ? 'reels' : 'studio';
-          history.replaceState(null, '', `#/${sec}/${project.id}`); render();
+          history.replaceState(null, '', `#/${sec}/${project.id}`); render(); resumePolish(project.id);
         }).catch((e) => { state._opening = null; toast(e.status === 404 ? 'That project no longer exists.' : e.message, 'error'); history.replaceState(null, '', `#/${r}`); render(); });
       }
       return;
@@ -399,16 +401,104 @@ async function generate() {
 
 // ---- script panel ----
 let saveTimer;
+let savePending = false;
 function scheduleSave() {
   clearTimeout(saveTimer);
-  const st = $('#save-state'); if (st) st.textContent = 'Unsaved changes…';
-  saveTimer = setTimeout(async () => {
+  const st = $('#save-state');
+  if (state.busy === 'polish') { if (st) st.textContent = 'Editing is paused while polishing'; return; }
+  if (st) st.textContent = 'Unsaved changes…';
+  savePending = true;
+  saveTimer = setTimeout(saveNow, 800);
+}
+async function saveNow() {
+  clearTimeout(saveTimer); savePending = false;
+  try {
+    const r = await api('/api/projects', { method: 'POST', body: { id: state.project.id, brief: state.brief, script: state.project.script } });
+    state.project.id = r.project.id; syncHash();
+    const s = $('#save-state'); if (s) s.textContent = 'Saved';
+    return true;
+  } catch (e) { const s = $('#save-state'); if (s) s.textContent = `Not saved: ${e.message}`; return false; }
+}
+
+// ---- quality loop (Analyze → Repair → Analyze) ----
+let polishTimer = null;
+function stopPolishPoll() { clearTimeout(polishTimer); polishTimer = null; }
+async function startPolish(rounds) {
+  const proj = state.project; if (!proj?.script) return;
+  if (savePending || !proj.id) { if (!(await saveNow())) return toast('Could not save the script first.', 'error'); }
+  const { provider, model } = currentModel();
+  try {
+    const { job } = await api(`/api/projects/${proj.id}/polish`, { method: 'POST', body: { provider, model, rounds, target: TARGET_SCORE } });
+    state.polish = { id: proj.id, job }; state.busy = 'polish'; renderScriptPanel();
+    pollPolish(proj.id);
+  } catch (e) { toast(e.message, 'error'); }
+}
+function pollPolish(id) {
+  stopPolishPoll();
+  polishTimer = setTimeout(async () => {
+    if (state.project?.id !== id) { stopPolishPoll(); if (state.busy === 'polish') state.busy = null; return; }
     try {
-      const r = await api('/api/projects', { method: 'POST', body: { id: state.project.id, brief: state.brief, script: state.project.script } });
-      state.project.id = r.project.id; syncHash();
-      const s = $('#save-state'); if (s) s.textContent = 'Saved';
-    } catch (e) { const s = $('#save-state'); if (s) s.textContent = `Not saved: ${e.message}`; }
-  }, 800);
+      const { job } = await api(`/api/projects/${id}/polish`);
+      state.polish = { id, job };
+      if (job?.status === 'running') { updatePolishCard(); pollPolish(id); return; }
+      state.busy = null;
+      const { project } = await api(`/api/projects/${id}`);
+      if (state.project?.id !== id) return;
+      state.project = project;
+      if (job?.status === 'error') toast(job.error, 'error');
+      else toast(job?.result?.reached ? `Polished: ${job.result.score}/100` : `Best score: ${job?.result?.score ?? '?'}/100`, job?.result?.reached ? 'ok' : 'warn');
+      renderScriptPanel();
+      $('#quality-h')?.focus();
+    } catch (e) { pollPolish(id); }
+  }, 1500);
+}
+async function resumePolish(id) {
+  try {
+    const { job } = await api(`/api/projects/${id}/polish`);
+    if (job?.status === 'running' && state.project?.id === id) { state.polish = { id, job }; state.busy = 'polish'; renderScriptPanel(); pollPolish(id); }
+  } catch { /* ignore */ }
+}
+function polishProgress(job) {
+  return h('div', { class: 'polish-run', id: 'polish-run' },
+    h('div', { class: 'polish-status' }, h('div', { class: 'spinner sm', 'aria-hidden': 'true' }), h('p', { id: 'polish-msg', role: 'status' }, job.message || 'Working…')),
+    h('ol', { class: 'polish-log', id: 'polish-log', 'aria-label': 'Polish log' }, (job.log || []).map((l) => h('li', null, l))),
+    h('button', { class: 'btn sm ghost', type: 'button', id: 'polish-stop', onClick: async () => { await api(`/api/projects/${state.polish.id}/polish/cancel`, { method: 'POST', body: {} }).catch(() => {}); const m = $('#polish-msg'); if (m) m.textContent = 'Stopping after this step… the best version so far is kept.'; } }, icon('x'), 'Stop'));
+}
+function updatePolishCard() {
+  const box = $('#polish-run'); if (!box || !state.polish?.job) return renderScriptPanel();
+  box.replaceWith(polishProgress(state.polish.job));
+}
+const scoreCls = (s) => (s >= 95 ? 'good' : s >= 80 ? 'mid' : 'bad');
+function qualityCard(proj) {
+  const qm = proj.meta?.quality;
+  const running = state.busy === 'polish' && state.polish?.id === proj.id && state.polish.job;
+  const card = h('section', { class: 'card quality', 'aria-labelledby': 'quality-h' });
+  const head = h('div', { class: 'q-head' },
+    h('div', null, h('h3', { id: 'quality-h', tabindex: '-1' }, icon('star'), ' Script quality'),
+      h('p', { class: 'hint' }, running ? 'The AI is reading the script, fixing the issues it finds and reading it again, until it scores 95+ (max 3 repair rounds). The best version is kept.'
+        : qm ? `Checked with ${qm.model} · ${new Date(qm.at).toLocaleString()}${qm.rounds ? ` · ${qm.rounds} repair round${qm.rounds > 1 ? 's' : ''}` : ''}` : 'Let the AI read and grade this script, then fix it until it scores 95+ out of 100. Uses your API key.')),
+    qm && !running ? h('div', { class: `q-score ${scoreCls(qm.score)}`, id: 'quality-score', 'aria-label': `Score ${qm.score} out of 100, ${scoreLabel(qm.score)}` }, h('strong', null, String(qm.score)), h('span', null, `/100 · ${scoreLabel(qm.score)}`)) : null);
+  card.append(head);
+  if (running) { card.append(polishProgress(state.polish.job)); return card; }
+  if (qm) {
+    if (qm.history?.length > 1) card.append(h('p', { class: 'hint', id: 'quality-history' }, 'Scores: ', qm.history.map((x) => `${x.round ? `round ${x.round}` : 'first read'} ${x.score}`).join(' → ')));
+    if (qm.summary) card.append(h('p', { class: 'q-summary' }, qm.summary));
+    const bars = h('ul', { class: 'q-bars', 'aria-label': 'Score by area' });
+    for (const r of RUBRIC) {
+      const v = qm.scores?.[r.id] ?? 0, pct = Math.round((v / r.max) * 100);
+      bars.append(h('li', { title: r.what }, h('span', { class: 'k' }, r.label), h('span', { class: 'bar', 'aria-hidden': 'true' }, h('span', { class: `fill ${scoreCls(pct)} w${Math.round(pct / 5) * 5}` })), h('span', { class: 'v' }, `${v}/${r.max}`)));
+    }
+    card.append(bars);
+    if (qm.failed?.length) card.append(h('div', { class: 'q-failed', role: 'note' }, h('strong', null, 'Must fix (automatic checks): '), h('ul', null, qm.failed.map((f) => h('li', null, `${f.label}: ${f.detail}`)))));
+    if (qm.issues?.length) card.append(h('details', { class: 'q-issues', id: 'quality-issues' }, h('summary', null, `${qm.issues.length} remaining note${qm.issues.length > 1 ? 's' : ''} from the editor`),
+      h('ul', null, qm.issues.map((i) => h('li', null, h('span', { class: `sev ${i.severity}` }, i.severity), ` ${i.clip ? `Clip ${i.clip}` : 'Whole script'} · ${i.problem} `, h('em', null, `Fix: ${i.fix}`))))));
+  }
+  const { model } = currentModel();
+  card.append(h('div', { class: 'toolbar' },
+    h('button', { class: 'btn primary', type: 'button', id: 'polish-btn', disabled: !!state.busy, onClick: () => startPolish(3) }, icon('star'), qm && qm.score >= TARGET_SCORE ? 'Polish again' : 'Polish to 95+'),
+    h('button', { class: 'btn', type: 'button', id: 'score-btn', disabled: !!state.busy, onClick: () => startPolish(0) }, qm ? 'Re-score' : 'Score only'),
+    h('span', { class: 'hint' }, `Model: ${model} · about 2–7 AI calls`)));
+  return card;
 }
 
 function renderScriptPanel() {
@@ -462,7 +552,8 @@ function renderScriptPanel() {
       stat('Video length', `${brief.layout === 'narration' ? a.totalSeconds : script.clips.length * brief.clipSeconds}s`),
       stat('Words', brief.dialogueMode === 'none' ? '—' : `${a.totalWords} / ${a.totalBudget}`),
       brief.layout === 'narration' ? stat('Clip length', `fits narration · max ${brief.clipSeconds}s`) : stat('Budget / clip', brief.dialogueMode === 'none' ? 'none' : `${a.budget} words · ${a.window}s`),
-      stat('Over budget', String(over), over ? 'bad' : 'good')),
+      stat('Over budget', String(over), over ? 'bad' : 'good'),
+      proj.meta?.quality ? stat('Quality', `${proj.meta.quality.score}/100`, scoreCls(proj.meta.quality.score) === 'mid' ? '' : scoreCls(proj.meta.quality.score)) : null),
     proj.meta?.model ? h('p', { class: 'hint', id: 'gen-meta' }, `Generated with ${proj.meta.provider} · ${proj.meta.model}${proj.meta.usage ? ` · ${(proj.meta.usage.input + proj.meta.usage.output).toLocaleString()} tokens${(() => { const c = costOf(proj.meta.model, proj.meta.usage.input, proj.meta.usage.output, state.user.settings.priceOverrides); return c == null ? '' : ` ≈ ${formatUsd(c)}`; })()}` : ''}${proj.meta.fitPasses ? ` · auto-fit ×${proj.meta.fitPasses}` : ''}${proj.meta.trimmedClips?.length ? ` · ended early at a sentence break in clip ${proj.meta.trimmedClips.join(', ')}` : ''}`) : null,
     h('div', { class: 'toolbar' },
       over ? h('button', { class: 'btn warn', type: 'button', id: 'fit-btn', disabled: !!state.busy, onClick: fitAll }, icon('scissors'), state.busy === 'fit' ? 'Fitting…' : `Fit ${over} clip${over > 1 ? 's' : ''} to budget`) : null,
@@ -473,6 +564,7 @@ function renderScriptPanel() {
       h('button', { class: 'btn', type: 'button', onClick: () => download(`${slug(script.title)}.json`, JSON.stringify({ brief, script, meta: proj.meta }, null, 2), 'application/json') }, icon('download'), 'JSON'),
       h('label', { class: 'check sm' }, h('input', { type: 'checkbox', id: 'embedStyle', checked: state.embedStyle, onChange: (e) => { state.embedStyle = e.target.checked; renderScriptPanel(); } }), ' Embed style sheet in image prompts'))));
 
+  panel.append(qualityCard(proj));
   panel.append(viewTabs());
   if (state.view === 'guide') { panel.append(guidePanel(script, brief)); restorePanelFocus(focusId, sel); return; }
   if (state.view === 'vepack') { panel.append(vePackPanel(script, brief)); restorePanelFocus(focusId, sel); return; }
@@ -796,6 +888,7 @@ async function openProject(id) {
   try {
     const { project } = await api(`/api/projects/${id}`);
     const nb = normalizeBrief(project.brief); ensureMode(nb.mode); state.project = project; state.brief = nb; state.error = null; go(`${nb.mode === 'reel' ? 'reels' : 'studio'}/${project.id}`);
+    resumePolish(project.id);
   } catch (e) { toast(e.message, 'error'); }
 }
 

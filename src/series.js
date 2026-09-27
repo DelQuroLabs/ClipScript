@@ -4,6 +4,7 @@ import { h, clear, icon, toast, download, slug, copyText, textDialog } from './d
 import { FRAME_MODES, FORMATS, SERIES_LIMITS, defaultSeriesOptions } from '../lib/domain/series.js';
 import { ASPECT_RATIOS } from '../lib/domain/project.js';
 import { formatUsd, formatRange, estimateAnalyzeTokens, priceRange } from '../lib/domain/pricing.js';
+import { TARGET_SCORE } from '../lib/domain/quality.js';
 
 const SEC_PRESETS = [5, 6, 8, 10, 12, 15];
 let poll = null;
@@ -107,10 +108,11 @@ function listView(ctx) {
 }
 
 // ---------------- detail ----------------
+const qcls = (x) => (x >= TARGET_SCORE ? 'good' : x >= 80 ? 'mid' : 'bad');
 function detailView(ctx, id) {
   const wrap = h('section', { class: 'series-detail', 'aria-labelledby': 'series-h' },
     h('div', { class: 'card', role: 'status' }, h('div', { class: 'spinner', 'aria-hidden': 'true' }), ' Loading series…'));
-  let data = null, saveT = null, edits = new Map();
+  let data = null, saveT = null, edits = new Map(), wasPolishing = false;
   const load = async (quiet) => {
     try {
       const prevCount = data?.episodes?.length, prevUpd = data?.series?.updatedAt;
@@ -118,7 +120,9 @@ function detailView(ctx, id) {
       if (prevCount !== data.episodes.length || prevUpd !== data.series.updatedAt) for (const k of Object.keys(cache)) delete cache[k];
       draw();
       if (data.episodes.length && !data.running) prefetch();
-      const live = data.running || data.series.status === 'analyzing' || data.series.status === 'writing';
+      const live = data.running || data.series.status === 'analyzing' || data.series.status === 'writing' || data.polish?.status === 'running';
+      if (wasPolishing && data.polish?.status !== 'running') { const ok = data.polish?.status === 'done'; toast(ok ? `Polish finished: ${data.polish.message}` : (data.polish?.error || 'Polishing stopped'), ok ? 'ok' : 'error'); }
+      wasPolishing = data.polish?.status === 'running';
       stopPoll();
       if (live && location.hash.startsWith(`#/series/${id}`)) poll = setTimeout(() => load(true), 1500);
     } catch (e) { if (!quiet) clear(wrap).append(h('p', { class: 'form-error', role: 'alert' }, e.message), h('a', { href: '#/series' }, 'Back to all series')); }
@@ -175,7 +179,8 @@ function detailView(ctx, id) {
     const focusId = document.activeElement?.id;
     const { series: s, episodes } = data;
     const plan = s.plan;
-    const live = data.running || s.status === 'analyzing' || s.status === 'writing';
+    const polishing = data.polish?.status === 'running';
+    const live = data.running || s.status === 'analyzing' || s.status === 'writing' || polishing;
     clear(wrap);
     const p = s.progress || {};
     const pct = p.total ? Math.round((p.done / p.total) * 100) : 0;
@@ -200,7 +205,7 @@ function detailView(ctx, id) {
         `Writing the ${data.cost.remaining.episodes} remaining episode${data.cost.remaining.episodes > 1 ? 's' : ''} on ${s.model}: about ${data.cost.priced ? formatRange(data.cost.remaining.range) : '(add a price for this model in Settings)'} · ~${Math.round(data.cost.remaining.tokens).toLocaleString()} tokens (${data.cost.remaining.basedOn}). Estimate only; your provider bills the exact amount.`) : null,
       plan ? h('div', { class: 'toolbar' },
         live && s.status === 'writing' ? h('button', { class: 'btn warn', type: 'button', id: 'series-pause', onClick: () => act('pause', null, 'Pausing after the current episode…') }, 'Pause')
-          : h('button', { class: 'btn primary', type: 'button', id: 'series-write', onClick: () => act('write', null, 'Writing started. You can leave this page; it keeps going.') }, icon('spark'), h('span', null, 'Write')),
+          : h('button', { class: 'btn primary', type: 'button', id: 'series-write', disabled: polishing, onClick: () => act('write', null, 'Writing started. You can leave this page; it keeps going.') }, icon('spark'), h('span', null, 'Write')),
         !live && st?.failed ? h('button', { class: 'btn', type: 'button', id: 'series-retry', onClick: () => act('write', { episodes: plan.episodes.filter((e) => e.status === 'failed').map((e) => e.no) }) }, icon('refresh'), `Retry ${st.failed} failed`) : null,
         h('div', { class: 'export-group primary', role: 'group', 'aria-labelledby': 'export-ve-l' }, h('span', { class: 'eg-label', id: 'export-ve-l' }, 'VideoExpress paste pack'),
           h('button', { class: 'btn sm primary', type: 'button', id: 'series-ve-copy', disabled: !episodes.length, onClick: () => exportAs('vepack', 'copy') }, icon('copy'), 'Copy'),
@@ -224,6 +229,7 @@ function detailView(ctx, id) {
       else wrap.append(h('div', { class: 'card empty' }, h('div', { class: 'spinner', 'aria-hidden': 'true' }), h('p', null, 'Reading your data, pulling out facts and scoring them. Big dumps take a minute or two.')));
       restore(focusId); return;
     }
+    if (episodes.length) wrap.append(polishCard(polishing));
     if (plan.bible?.visualStyle) wrap.append(h('details', { class: 'card stylesheet' }, h('summary', null, h('h2', { class: 'h3' }, 'Series look & voice'), h('span', { class: 'hint' }, 'Shared by every episode so the series feels like one show')),
       h('dl', { class: 'bible' }, ...[['Visual style', plan.bible.visualStyle], ['Palette', plan.bible.palette], ['Camera', plan.bible.camera], ['Narrator', plan.bible.narratorVoice], ['Tone', plan.bible.tone], ['Outro', plan.bible.outro]].filter(([, v]) => v).flatMap(([k, v]) => [h('dt', null, k), h('dd', null, v)]))));
 
@@ -248,6 +254,7 @@ function detailView(ctx, id) {
         h('td', null, done?.analysis ? h('span', null, fmtDur(done.analysis.seconds), h('span', { class: 'hint' }, ` · ${done.analysis.clips} clips`))
           : h('select', { id: `ep-len-${e.no}`, disabled: locked, 'aria-label': `Episode ${e.no} target length`, onChange: (ev) => edit(e.no, { targetSeconds: Number(ev.target.value) }) },
             lens.map((x) => h('option', { value: x, selected: x === e.targetSeconds ? true : null }, `${x}s`)))),
+        h('td', { class: 'num' }, done && data.quality?.[e.no] != null ? h('span', { class: `q-chip ${qcls(data.quality[e.no])}`, id: `ep-score-${e.no}`, title: 'Script quality score' }, String(data.quality[e.no])) : h('span', { class: 'hint' }, '—')),
         h('td', null, h('span', { class: `epst epst-${e.status}`, title: e.error || '' }, e.status === 'done' ? '✓ Written' : e.status === 'writing' ? 'Writing…' : e.status === 'queued' ? 'Queued' : e.status === 'failed' ? 'Failed' : '—'),
           e.status === 'failed' && e.error ? h('span', { class: 'sr-only' }, `: ${e.error}`) : null,
           done && !live ? h('button', { class: 'btn ghost sm', type: 'button', id: `ep-redo-${e.no}`, 'aria-label': `Rewrite episode ${e.no}`, onClick: () => act('write', { episodes: [e.no] }, `Rewriting episode ${e.no}…`) }, icon('refresh')) : null));
@@ -257,11 +264,44 @@ function detailView(ctx, id) {
       totalsEl,
       h('div', { class: 'table-wrap' }, h('table', { class: 'plan' },
         h('caption', { class: 'sr-only' }, 'Episodes planned from your data'),
-        h('thead', null, h('tr', null, ...['Use', '#', 'Episode', 'Format', 'Interest', 'Length', 'Status'].map((t) => h('th', { scope: 'col' }, t)))),
+        h('thead', null, h('tr', null, ...['Use', '#', 'Episode', 'Format', 'Interest', 'Length', 'Score', 'Status'].map((t) => h('th', { scope: 'col' }, t)))),
         h('tbody', null, rows)))));
     paintTotals();
     wrap.querySelectorAll('.progress span').forEach((sp) => { sp.style.width = `${sp.dataset.pct}%`; });
     restore(focusId);
+  }
+  function polishCard(polishing) {
+    const j = data.polish;
+    const scores = Object.values(data.quality || {}).filter((x) => x != null);
+    const avg = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : null;
+    const top = scores.filter((x) => x >= TARGET_SCORE).length;
+    const { model } = ctx.currentModel();
+    const run = async (body, msg) => {
+      const { provider, model: m } = ctx.currentModel();
+      try { await flushEdits(); await api(`/api/series/${id}/polish`, { method: 'POST', body: { provider, model: m, target: TARGET_SCORE, ...body } }); wasPolishing = true; toast(msg, 'ok'); await load(); }
+      catch (e) { toast(e.message, 'error'); }
+    };
+    const card = h('section', { class: 'card quality', 'aria-labelledby': 'squality-h' },
+      h('div', { class: 'q-head' }, h('div', null, h('h2', { class: 'h3', id: 'squality-h' }, icon('star'), ' Script quality'),
+        h('p', { class: 'hint' }, polishing ? 'Reading, fixing and re-reading each episode until it scores 95+. You can leave this page; it keeps going.'
+          : `Let the AI grade every episode and fix it until it scores ${TARGET_SCORE}+ out of 100 (max 3 repair rounds each; the best version is kept). Uses your API key.`)),
+        avg != null && !polishing ? h('div', { class: `q-score ${qcls(avg)}`, id: 'series-quality' }, h('strong', null, String(avg)), h('span', null, `avg · ${top}/${data.episodes.length} at ${TARGET_SCORE}+`)) : null));
+    if (polishing) {
+      const pct = j.total ? Math.round((j.done / j.total) * 100) : 0;
+      card.append(h('div', { class: 'progress-wrap', role: 'status', 'aria-live': 'polite' },
+        h('div', { class: 'progress', role: 'progressbar', 'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-valuenow': pct, 'aria-label': 'Polish progress' }, h('span', { dataset: { pct } })),
+        h('p', { class: 'hint', id: 'series-polish-msg' }, `${j.done}/${j.total} episodes · ${j.message || ''}`)),
+        h('ol', { class: 'polish-log', 'aria-label': 'Polish log' }, (j.log || []).slice(-8).map((l) => h('li', null, l))),
+        h('button', { class: 'btn sm ghost', type: 'button', id: 'series-polish-stop', onClick: () => act('polish/cancel', null, 'Stopping after the current step…') }, icon('x'), 'Stop'));
+      return card;
+    }
+    if (j?.status === 'done' || j?.status === 'error') card.append(h('p', { class: j.error ? 'form-error' : 'hint', id: 'series-polish-last' }, j.error ? `Last run stopped: ${j.error}` : `Last run: ${j.message}`));
+    const below = data.episodes.filter((e) => !(data.quality?.[e.no] >= TARGET_SCORE)).length;
+    card.append(h('div', { class: 'toolbar' },
+      h('button', { class: 'btn primary', type: 'button', id: 'series-polish', disabled: data.running || !below, onClick: () => run({ rounds: 3, onlyBelow: true }, 'Polishing started. You can leave this page; it keeps going.') }, icon('star'), below ? `Polish ${below} episode${below > 1 ? 's' : ''} to ${TARGET_SCORE}+` : `All episodes at ${TARGET_SCORE}+`),
+      h('button', { class: 'btn', type: 'button', id: 'series-score', disabled: data.running, onClick: () => run({ rounds: 0, onlyBelow: false }, 'Scoring every episode (no changes)…') }, 'Score all (no changes)'),
+      h('span', { class: 'hint' }, `Model: ${model}`)));
+    return card;
   }
   const restore = (fid) => { if (fid) document.getElementById(fid)?.focus({ preventScroll: true }); };
   load();
