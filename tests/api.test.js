@@ -487,3 +487,56 @@ test('polish loop: analyze → repair → analyze reaches 95+, keeps the best ve
   assert.equal(r.data.settings.criticsOff.length, 9, 'at least one critic stays on');
   await a.call('/api/settings', { method: 'PUT', body: { criticsOff: [] } });
 });
+
+test('build criteria: frozen at generation, sent to analyzer + critics, guarded in code (restore, reject, filter)', async () => {
+  const a = client();
+  await a.call('/api/auth/register', { method: 'POST', body: { email: 'spec@example.com', password: 'correct-horse-battery' } });
+  const facts = 'Octopuses have three hearts and blue blood. They can taste with their arms. Some species change colour in a fraction of a second. An octopus has about five hundred million neurons.';
+  const gen = async (extra) => {
+    const r = await a.call('/api/generate', { method: 'POST', body: { brief: { mode: 'reel', clipCount: 4, clipSeconds: 6, dialogueMode: 'voiceover', aspectRatio: '9:16', callToAction: 'Follow for more ocean facts', tone: 'playful', ...extra }, provider: 'demo', model: 'demo-writer' } });
+    assert.equal(r.status, 200, JSON.stringify(r.data)); return r.data.project;
+  };
+  const polish = async (id, rounds = 3) => {
+    let r = await a.call(`/api/projects/${id}/polish`, { method: 'POST', body: { provider: 'demo', model: 'demo-writer', rounds } });
+    assert.equal(r.status, 202, JSON.stringify(r.data));
+    for (let i = 0; i < 200; i++) { r = await a.call(`/api/projects/${id}/polish`); if (r.data.job?.status !== 'running') return r.data; await new Promise((res) => setTimeout(res, 25)); }
+    throw new Error('timeout');
+  };
+  // 1) spec frozen at generation
+  let p = await gen({ sourceData: facts });
+  const ids = p.meta.buildSpec.features.map((f) => f.id);
+  for (const want of ['ai-only', 'format', 'aspect', 'faceless', 'audio', 'content', 'onscreen', 'tone']) assert.ok(ids.includes(want), `spec has ${want}: ${ids}`);
+  // 2) conflicting notes are dropped (remove on-screen text / hire a voice actor), and the repair still reaches 95+
+  let d = await polish(p.id);
+  assert.equal(d.job.status, 'done', d.job.error);
+  assert.ok(d.quality.score >= 95, `score ${d.quality.score}`);
+  p = (await a.call(`/api/projects/${p.id}`)).data.project;
+  assert.ok(p.script.clips.every((c) => c.onScreenText), 'on-screen text survived');
+  assert.deepEqual(p.meta.buildSpec.features.map((f) => f.id), ids, 'spec unchanged by polishing');
+  d = await polish(p.id, 0); // re-score keeps the filter record of the best round
+  // first-read notes on a fresh project show the filter
+  const p1 = await gen({ sourceData: facts });
+  d = await polish(p1.id, 0);
+  const ign = d.quality.ignored.map((x) => `${x.lockedBy}:${x.fix}`);
+  assert.ok(ign.some((x) => /^onscreen:Remove the on-screen text/.test(x)), ign.join(' | '));
+  assert.ok(ign.some((x) => /^ai-only:Hire a professional voice actor/.test(x)), ign.join(' | '));
+  assert.ok(!d.quality.issues.some((x) => /on-screen text/i.test(x.fix)), 'repairer never sees it');
+  // 3) a repair that deletes on-screen text + sound cues is put back in code
+  const p2 = await gen({ sourceData: `${facts} SABOTAGE-DROP` });
+  d = await polish(p2.id);
+  assert.equal(d.job.status, 'done', d.job.error);
+  assert.ok(d.job.log.some((l) => /put back .*on-screen text/.test(l)), d.job.log.join('\n'));
+  const s2 = (await a.call(`/api/projects/${p2.id}`)).data.project.script;
+  assert.ok(s2.clips.every((c) => c.onScreenText), 'restored');
+  assert.ok(d.quality.score >= 95);
+  // 4) a repair that guts the narration is rejected; the rejection is fed back and the next round is accepted
+  const p3 = await gen({ sourceData: `${facts} SABOTAGE-CUT` });
+  d = await polish(p3.id);
+  assert.equal(d.job.status, 'done', d.job.error);
+  assert.ok(d.job.log.some((l) => /Round 1: repair rejected \(it broke Keep the full story/.test(l)), d.job.log.join('\n'));
+  assert.deepEqual(d.quality.history.map((h) => (h.rejected ? 'rejected' : h.round)), [0, 'rejected', 2]);
+  const s3 = (await a.call(`/api/projects/${p3.id}`)).data.project.script;
+  assert.equal(s3.clips.length, 4);
+  assert.ok(s3.clips.reduce((n, c) => n + c.dialogue.map((l) => l.line).join(' ').split(/\s+/).length, 0) > 12, 'narration not gutted');
+  assert.ok(d.quality.score >= 95);
+});

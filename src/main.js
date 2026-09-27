@@ -482,8 +482,10 @@ function qualityCard(proj) {
   card.append(head);
   if (running) { card.append(polishProgress(state.polish.job)); return card; }
   if (qm) {
-    if (qm.history?.length > 1) card.append(h('p', { class: 'hint', id: 'quality-history' }, 'Scores: ', qm.history.map((x) => `${x.round ? `round ${x.round}` : 'first read'} ${x.score}`).join(' → ')));
+    if (qm.history?.length > 1) card.append(h('p', { class: 'hint', id: 'quality-history' }, 'Scores: ', qm.history.map((x) => `${x.round ? `round ${x.round}` : 'first read'} ${x.rejected ? 'rejected (broke a locked feature)' : x.score}`).join(' → ')));
     if (qm.summary) card.append(h('p', { class: 'q-summary' }, qm.summary));
+    const nLocked = proj.meta?.buildSpec?.features?.length || 0;
+    if (nLocked) card.append(h('p', { class: 'hint', id: 'quality-locked' }, `🔒 ${nLocked} build features locked and checked after every repair${qm.ignored?.length ? ` · ${qm.ignored.length} note${qm.ignored.length > 1 ? 's' : ''} ignored because ${qm.ignored.length > 1 ? 'they' : 'it'} would undo one` : ''}.`));
     if (qm.critics?.length) {
       const bl = qm.critics.filter((c) => c.score < VETO_BELOW);
       card.append(h('p', { class: 'q-critics', id: 'quality-critics' }, h('strong', null, `Critic panel: ${qm.criticAvg}/10`), ` from ${qm.critics.length} viewpoints${bl.length ? ` · blocking: ${bl.map((c) => c.name).join(', ')}` : ''} `,
@@ -598,6 +600,14 @@ function viewTabs() {
     tab('guide', 'Scripts by VideoExpress service', 'check', 'The scripts grouped by VideoExpress service: image → video → sound'),
     tab('critics', 'Critic panel', 'star', 'The script audited from 10 viewpoints; their notes feed Polish to 95+'));
 }
+/** The build criteria every analyzer, critic and repair must keep (frozen when the entry was generated). */
+function lockedCard(spec) {
+  const f = spec?.features || [];
+  return h('details', { class: 'card locked', id: 'locked-criteria' },
+    h('summary', null, h('h4', { class: 'inline' }, `🔒 Locked build criteria (${f.length || 'set on first polish'})`), h('span', { class: 'hint' }, ' · the analyzer, every critic and the repairer must keep these')),
+    f.length ? h('ul', { class: 'locked-list' }, f.map((x) => h('li', { id: `locked-${x.id}` }, h('strong', null, x.label), h('span', { class: 'hint' }, ` ${x.rule}`)))) : h('p', { class: 'hint' }, 'Older entry: the criteria are frozen from the brief and the current script the first time it is scored.'),
+    h('p', { class: 'hint' }, 'Enforced in code too: after every repair, anything dropped is put back from the previous version; a repair that still breaks a locked feature is rejected and the best version is kept. No human review needed.'));
+}
 const critCls = (x) => (x >= 8 ? 'good' : x >= VETO_BELOW ? 'mid' : 'bad');
 /** Critic panel: the script audited from many viewpoints. Runs inside Polish to 95+ (and Score only). */
 function criticsPanel(proj) {
@@ -607,6 +617,7 @@ function criticsPanel(proj) {
   const wrap = h('div', { id: 'view-body-critics', role: 'tabpanel', 'aria-labelledby': 'view-critics', class: 'critics' });
   const crit = qm?.critics || [];
   const avg = qm?.criticAvg;
+  const spec = proj.meta?.buildSpec;
   const blocking = crit.filter((c) => c.score < VETO_BELOW);
   wrap.append(h('div', { class: 'card guide-top' },
     h('div', { class: 'q-head' },
@@ -624,12 +635,15 @@ function criticsPanel(proj) {
           try { await saveSettings({ criticsOff: off }); renderScriptPanel(); document.getElementById(`critic-on-${c.id}`)?.focus(); document.getElementById('critic-pick')?.setAttribute('open', ''); } catch (err) { toast(err.message, 'error'); }
         } }), ` ${c.icon} ${c.name}`))),
       h('p', { class: 'hint' }, 'Changes apply the next time the script is scored or polished.'))));
+  wrap.append(lockedCard(spec));
   if (!crit.length) {
     wrap.append(h('div', { class: 'card empty' }, h('p', null, running ? 'Waiting for the first verdicts…' : 'No verdicts yet. Run the critics or Polish to 95+ to hear from the panel.'),
       h('ul', { class: 'critic-list-preview' }, CRITICS.filter((c) => on.has(c.id)).map((c) => h('li', null, h('strong', null, `${c.icon} ${c.name}: `), c.focus)))));
     return wrap;
   }
   if (qm.reason) wrap.append(h('p', { class: 'q-failed', role: 'note', id: 'critics-reason' }, h('strong', null, 'Blocking 95+: '), qm.reason));
+  if (qm.ignored?.length) wrap.append(h('details', { class: 'card q-issues', id: 'critics-ignored' }, h('summary', null, `${qm.ignored.length} note${qm.ignored.length > 1 ? 's' : ''} ignored (would undo a locked build feature or need a human)`),
+    h('ul', null, qm.ignored.map((n) => { const f = spec?.features?.find((x) => x.id === n.lockedBy); return h('li', null, `${n.critic ? `${n.critic}: ` : 'Editor: '}“${n.fix || n.problem}” `, h('em', null, `blocked by 🔒 ${f?.label || n.lockedBy}`)); }))));
   const grid = h('div', { class: 'critic-grid' });
   for (const c of [...crit].sort((a, b) => a.score - b.score)) {
     const def = CRITICS.find((x) => x.id === c.id);

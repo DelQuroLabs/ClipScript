@@ -242,6 +242,7 @@ try {
     const s0 = Number(await page.locator('#quality-score strong').textContent());
     step('polish: Score only grades the script without changing it', s0 > 50 && s0 < 95 && (await page.locator('textarea[id$="-img"]').first().inputValue()) === imgBefore, `score ${s0}`);
     step('critics: Score only also runs the critic panel and names who is blocking 95+', /Critic panel: [\d.]+\/10/.test(await page.locator('#quality-critics').textContent()) && /blocking:/.test(await page.locator('#quality-critics').textContent()), await page.locator('#quality-critics').textContent());
+    step('locked: quality card says the build features are locked and that conflicting notes were ignored', /🔒 \d+ build features locked/.test(await page.locator('#quality-locked').textContent()) && /ignored/.test(await page.locator('#quality-locked').textContent()), await page.locator('#quality-locked').textContent());
     step('polish: breakdown shows 8 rubric bars and editor notes', (await page.locator('.q-bars li').count()) === 8 && await vis(page.locator('#quality-issues')));
     await page.locator('#polish-btn').click();
     const sawRun = await page.locator('#polish-run').waitFor({ timeout: 3000 }).then(() => true).catch(() => false);
@@ -255,6 +256,11 @@ try {
     const cScores = await page.locator('.critic-score').allTextContents();
     step('critics: Critic panel tab shows all 10 viewpoints, each satisfied after polishing', cScores.length === 10 && cScores.every((x) => parseFloat(x) >= 9), cScores.join(' '));
     step('critics: each critic card has a verdict and its focus', (await page.locator('.critic-verdict').count()) === 10 && (await page.locator('.critic-focus').count()) === 10);
+    await page.locator('#locked-criteria summary').click();
+    step('locked: Critic panel lists the locked build criteria (faceless, on-screen text, AI-only, clip format)', await vis(page.locator('#locked-faceless')) && await vis(page.locator('#locked-onscreen')) && await vis(page.locator('#locked-ai-only')) && await vis(page.locator('#locked-format')));
+    const onScreenAll = await page.evaluate(async () => { const id = Number(location.hash.split('/')[2]); const r = await fetch(`/api/projects/${id}`, { headers: window.__csHeaders?.() || {} }); return r.ok ? (await r.json()).project.script.clips.every((c) => c.onScreenText) : null; }).catch(() => null);
+    step('locked: after polishing, every clip still has its on-screen text', onScreenAll !== false, String(onScreenAll));
+    await page.locator('#locked-criteria summary').click();
     await page.locator('#critic-pick summary').click();
     await page.locator('#critic-on-safety').uncheck();
     await page.locator('#critic-pick summary', { hasText: '9 of 10 on' }).waitFor({ timeout: 5000 });

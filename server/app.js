@@ -15,6 +15,7 @@ import { extractJson, normalizeScript, analyzeScript, composeImagePrompt } from 
 import { guideMarkdown } from '../lib/domain/guide.js';
 import { vePackSeriesMarkdown, normalizeVeSettings } from '../lib/domain/vepack.js';
 import { hardChecks, normalizeReview, combineScore, TARGET_SCORE, MAX_ROUNDS, DEFAULT_ROUNDS } from '../lib/domain/quality.js';
+import { buildSpec, specViolations, restoreFeatures, filterBySpec } from '../lib/domain/buildSpec.js';
 import { enabledCritics, normalizeCritics, normalizeCriticsOff, criticAverage, CRITICS } from '../lib/domain/critics.js';
 import { reviewerSystemPrompt, analyzePrompt, repairSystemPrompt, repairPrompt, POLISH_PROMPT_VERSION } from '../lib/domain/polishPrompts.js';
 import { costOf, priceFor, normalizePriceOverrides, estimateSeriesWrite, priceRange, PRICES_SOURCE } from '../lib/domain/pricing.js';
@@ -372,7 +373,7 @@ export function createApp(config = {}) {
   const polishJobs = new Map(); // 'p:<projectId>' | 's:<seriesId>' → job
   const clampRounds = (n) => Math.max(0, Math.min(MAX_ROUNDS, Number.isFinite(Number(n)) ? Math.round(Number(n)) : DEFAULT_ROUNDS));
   const clampTarget = (n) => Math.max(50, Math.min(100, Number(n) || TARGET_SCORE));
-  async function polishScript(userId, provider, model, brief, script, { target, rounds, progress, cancelled, criticIds = [] }) {
+  async function polishScript(userId, provider, model, brief, script, { target, rounds, progress, cancelled, criticIds = [], spec = null }) {
     const usage = { input: 0, output: 0 };
     const history = [];
     const fakeReq = { user: { id: userId }, body: { provider, model } };
@@ -382,24 +383,29 @@ export function createApp(config = {}) {
       return r;
     };
     const evaluate = async (sc, round) => {
-      const checks = hardChecks(sc, brief);
+      const checks = hardChecks(sc, brief, spec);
       progress({ round, phase: 'analyzing', message: round ? `Round ${round}: checking the repaired script…` : 'Reading and scoring the script…' });
       if (criticIds.length) progress({ round, phase: 'analyzing', message: `${round ? `Round ${round}: ` : ''}scoring + ${criticIds.length} critics auditing…` });
-      const r = await call('analyze', reviewerSystemPrompt(), analyzePrompt(sc, brief, checks, criticIds));
+      const r = await call('analyze', reviewerSystemPrompt(), analyzePrompt(sc, brief, checks, criticIds, spec));
       const raw = extractJson(r.text);
       const review = normalizeReview(raw);
       const critics = criticIds.length ? normalizeCritics(raw?.critics, criticIds) : [];
+      // Drop any note that would undo a locked build feature (or ask a human to do something): the repairer never sees it.
+      const ignored = [];
+      { const f = filterBySpec(review.issues, spec); review.issues = f.kept; ignored.push(...f.dropped); }
+      for (const c of critics) { const f = filterBySpec(c.notes, spec); c.notes = f.kept; ignored.push(...f.dropped.map((d) => ({ ...d, critic: c.name }))); }
       const { score, capped, reason } = combineScore(review, checks, target, critics.length ? critics : null);
-      const entry = { round, score, capped, reason, critics, criticAvg: criticAverage(critics), ai: review.ai, checks: checks.score, scores: review.scores, summary: review.summary, issues: review.issues, failed: checks.failed.map((c) => ({ label: c.label, detail: c.detail })) };
+      const entry = { round, score, capped, reason, ignored, critics, criticAvg: criticAverage(critics), ai: review.ai, checks: checks.score, scores: review.scores, summary: review.summary, issues: review.issues, failed: checks.failed.map((c) => ({ label: c.label, detail: c.detail })) };
       history.push(entry);
       progress({ round, phase: 'scored', score, message: `${round ? `Round ${round}` : 'First read'}: ${score}/100` });
       return { entry, review, checks, critics };
     };
     let best = { script, ev: await evaluate(script, 0) };
+    let rejected = [];
     for (let i = 1; i <= rounds && best.ev.entry.score < target; i++) {
       if (cancelled()) break;
       progress({ round: i, phase: 'repairing', message: `Round ${i}: repairing ${best.ev.review.issues.length || 'the weakest'} issue${best.ev.review.issues.length === 1 ? '' : 's'}…` });
-      const r = await call('repair', repairSystemPrompt(), repairPrompt(best.script, brief, best.ev.review, best.ev.checks, best.ev.critics));
+      const r = await call('repair', repairSystemPrompt(), repairPrompt(best.script, brief, best.ev.review, best.ev.checks, best.ev.critics, spec, rejected));
       let next;
       try { next = normalizeScript(extractJson(r.text), brief); } catch { continue; }
       if (!next.clips.length) continue;
@@ -409,6 +415,20 @@ export function createApp(config = {}) {
       const fm = { usage: { input: 0, output: 0 } };
       ({ script: next } = await fitDialogue(fakeReq, next, brief, fm));
       usage.input += fm.usage.input; usage.output += fm.usage.output;
+      // Guard the build criteria in code: put back what the repair dropped, then reject it if anything is still broken.
+      if (spec) {
+        const rs = restoreFeatures(spec, next, best.script);
+        next = rs.script;
+        if (rs.restored.length) progress({ round: i, phase: 'guard', message: `Round ${i}: put back ${rs.restored.slice(0, 4).join(', ')}${rs.restored.length > 4 ? ` +${rs.restored.length - 4} more` : ''} that the repair dropped` });
+        const v = specViolations(spec, next, brief);
+        if (v.length) {
+          rejected = v;
+          history.push({ round: i, rejected: v, score: null });
+          progress({ round: i, phase: 'rejected', message: `Round ${i}: repair rejected (it broke ${v.map((x) => x.label).join('; ')}). Kept the previous version.` });
+          continue;
+        }
+        rejected = [];
+      }
       if (cancelled()) break;
       const ev = await evaluate(next, i);
       if (ev.entry.score > best.ev.entry.score) best = { script: next, ev };
@@ -420,10 +440,21 @@ export function createApp(config = {}) {
     issues: out.history.find((h) => h.round === out.bestRound)?.issues || [], failed: out.history.find((h) => h.round === out.bestRound)?.failed || [],
     critics: out.history.find((h) => h.round === out.bestRound)?.critics || [], criticAvg: out.history.find((h) => h.round === out.bestRound)?.criticAvg ?? null,
     reason: out.history.find((h) => h.round === out.bestRound)?.reason || '',
-    history: out.history.map(({ round, score, capped, criticAvg }) => ({ round, score, capped, criticAvg })) });
+    ignored: (out.history.find((h) => h.round === out.bestRound)?.ignored || []).slice(0, 20),
+    history: out.history.map(({ round, score, capped, criticAvg, rejected }) => (rejected ? { round, rejected: rejected.map((v) => `${v.label}: ${v.detail}`) } : { round, score, capped, criticAvg })) });
   const jobOut = (j) => j && { status: j.status, phase: j.phase, round: j.round, message: j.message, log: j.log.slice(-40), error: j.error, result: j.result, done: j.done, total: j.total, current: j.current, startedAt: j.startedAt };
   const newJob = (extra = {}) => ({ status: 'running', phase: 'starting', round: 0, message: 'Starting…', log: [], cancel: false, startedAt: new Date().toISOString(), ...extra });
-  const jobProgress = (job, prefix = '') => (p) => { Object.assign(job, { phase: p.phase, round: p.round, message: prefix + p.message }); if (p.phase === 'scored' || p.phase === 'repairing') job.log.push(prefix + p.message); };
+  const jobProgress = (job, prefix = '') => (p) => { Object.assign(job, { phase: p.phase, round: p.round, message: prefix + p.message }); if (['scored', 'repairing', 'guard', 'rejected'].includes(p.phase)) job.log.push(prefix + p.message); };
+  function specFor(userId, brief, script, oldMeta) {
+    if (oldMeta.buildSpec?.features?.length) return oldMeta.buildSpec;
+    // Entries made before build criteria existed: freeze them now from the brief, the series plan and the current script.
+    let ctx = {};
+    if (brief.seriesId) {
+      const row = q.seriesById.get(brief.seriesId, userId);
+      if (row) { const ser = loadSeries(row); ctx = episodeCtx(ser, ser.plan?.episodes?.find((e) => e.no === brief.episodeNo)); }
+    }
+    return buildSpec(brief, script, ctx);
+  }
   function polishProject(userId, projectId, provider, model, target, rounds, job, prefix = '', extraSource = '') {
     const p = q.project.get(projectId, userId);
     if (!p || !p.script) throw new LlmError('Project not found', 404, 'not_found');
@@ -431,11 +462,12 @@ export function createApp(config = {}) {
     const script = normalizeScript(JSON.parse(p.script), brief);
     const oldMeta = JSON.parse(p.meta || '{}');
     const scoreBrief = extraSource && !brief.sourceData ? { ...brief, sourceData: extraSource } : brief;
+    const spec = specFor(userId, brief, script, oldMeta);
     const criticIds = enabledCritics(settingsOf(q.userById.get(userId) || {}));
-    return polishScript(userId, provider, model, scoreBrief, script, { target, rounds, criticIds, progress: jobProgress(job, prefix), cancelled: () => job.cancel }).then((out) => {
+    return polishScript(userId, provider, model, scoreBrief, script, { target, rounds, criticIds, spec, progress: jobProgress(job, prefix), cancelled: () => job.cancel }).then((out) => {
       const fresh = normalizeScript(out.script, brief);
       fresh.buildProgress = script.buildProgress || {};
-      const meta = { ...oldMeta, quality: qualityMeta(out, model, target), usage: { input: (oldMeta.usage?.input || 0) + out.usage.input, output: (oldMeta.usage?.output || 0) + out.usage.output } };
+      const meta = { ...oldMeta, buildSpec: spec, quality: qualityMeta(out, model, target), usage: { input: (oldMeta.usage?.input || 0) + out.usage.input, output: (oldMeta.usage?.output || 0) + out.usage.output } };
       q.updProject.run(fresh.title || p.title, JSON.stringify(brief), JSON.stringify(fresh), JSON.stringify(meta), projectId, userId);
       return { out, meta };
     });
@@ -484,6 +516,7 @@ export function createApp(config = {}) {
       let analysis;
       if (autoFit) ({ script, analysis } = await fitDialogue(req, script, brief, meta));
       else analysis = analyzeScript(script, brief);
+      meta.buildSpec = buildSpec(brief, script); // locked build criteria for the quality loop
       const id = saveProject(req.user.id, Number(req.body?.projectId) || null, brief, script, meta);
       res.json({ project: { id, brief, script, meta }, analysis });
     } catch (e) { next(e); }
@@ -600,6 +633,7 @@ export function createApp(config = {}) {
     ser.progress = { step: 'planned', done: chunks.length + 1, total: chunks.length + 1, message: `${plan.episodes.length} episodes planned from ${plan.facts.length} facts.` };
     saveSeries(ser, { usageIn: r.usage.input, usageOut: r.usage.output });
   }
+  const episodeCtx = (ser, ep) => ({ frames: ser.settings.options.frames, hook: ep?.hook || '', format: ep?.format || '', targetSeconds: ep?.targetSeconds || 0, outro: ser.plan?.bible?.outro || '', bible: ser.plan?.bible || {}, seriesTitle: ser.plan?.seriesTitle || ser.title });
   async function writeEpisode(ser, ep) {
     const facts = ser.plan.facts.filter((f) => ep.factIds.includes(f.id));
     const r = await callModelAs(ser.user_id, ser.provider, ser.model, 'series-episode', seriesSystemPrompt(), episodePrompt(ep, facts, ser.settings, ser.plan.bible, ser.plan.seriesTitle), SERIES_PROMPT_VERSION);
@@ -611,6 +645,7 @@ export function createApp(config = {}) {
       clipCount: script.clips.length, seriesId: ser.id, episodeNo: ep.no, narratorVoice: b.narratorVoice || ser.plan.bible.narratorVoice, tone: b.tone || ser.plan.bible.tone });
     const a = analyzeEpisode(script, brief);
     const meta = { ...r.provenance, usage: { ...r.usage }, series: { id: ser.id, no: ep.no, format: ep.format, targetSeconds: ep.targetSeconds } };
+    meta.buildSpec = buildSpec(brief, script, episodeCtx(ser, ep));
     const existing = ep.projectId ? q.project.get(ep.projectId, ser.user_id) : null;
     if (existing) q.updProject.run(script.title, JSON.stringify(brief), JSON.stringify(script), JSON.stringify(meta), existing.id, ser.user_id);
     const projectId = existing ? existing.id : Number(q.insertEpisode.run(ser.user_id, script.title, JSON.stringify(brief), JSON.stringify(script), JSON.stringify(meta), ser.id, ep.no).lastInsertRowid);

@@ -33,7 +33,7 @@
   {
    "id": "O-2",
    "summary": "No password-reset email flow",
-   "opened_at": "2026-09-27T16:27:54+00:00"
+   "opened_at": "2026-09-27T16:44:10+00:00"
   }
  ],
  "blockers": [
@@ -42,20 +42,20 @@
    "summary": "Firefox/WebKit not verified",
    "category": "capability-missing",
    "related_gate": "E2E-001",
-   "since": "2026-09-27T16:27:54+00:00"
+   "since": "2026-09-27T16:44:10+00:00"
   },
   {
    "id": "BL-2",
    "summary": "Deployment needs Class D authorization + host access",
    "category": "authorization-needed",
-   "since": "2026-09-27T16:27:54+00:00"
+   "since": "2026-09-27T16:44:10+00:00"
   }
  ],
  "pending_user_questions": [
   {
    "id": "Q-1",
    "question": "Authorize Class D deploy to coolify.delquro.com? Which app domain/subdomain (PUBLIC_ORIGIN)?",
-   "asked_at": "2026-09-27T16:27:54+00:00"
+   "asked_at": "2026-09-27T16:44:10+00:00"
   }
  ],
  "decisions": [
@@ -63,55 +63,55 @@
    "id": "D-013",
    "summary": "Cost estimates: OpenAI Standard short-context prices (user-pasted chart 2026-09-23) built in; per-user price overrides for other providers; cost on usage table, project meta and series (spent + remaining range)",
    "source_path": "docs/decisions.md",
-   "decided_at": "2026-09-27T16:27:54+00:00"
+   "decided_at": "2026-09-27T16:44:10+00:00"
   },
   {
    "id": "D-012",
    "summary": "Scripts by VideoExpress service view: ClipScript only writes words; scripts grouped as Image scripts / Video scripts / Sound scripts / Post text with pasted checklist; Markdown per project and per series",
    "source_path": "docs/decisions.md",
-   "decided_at": "2026-09-27T16:27:54+00:00"
+   "decided_at": "2026-09-27T16:44:10+00:00"
   },
   {
    "id": "D-011",
    "summary": "Series: raw dump → fact extraction (chunked) → AI plan (grouping/length by interest) → narration-first episodes; clips sized to narration, never cut; first/last frame prompts (auto/first/both/chain)",
    "source_path": "docs/decisions.md",
-   "decided_at": "2026-09-27T16:27:54+00:00"
+   "decided_at": "2026-09-27T16:44:10+00:00"
   },
   {
    "id": "D-010",
    "summary": "Cut-off protection: speaking-time estimate (numbers/acronyms expanded, syllables, pauses) + 10% safety margin + sentence-boundary trim safety net",
    "source_path": "docs/decisions.md",
-   "decided_at": "2026-09-27T16:27:54+00:00"
+   "decided_at": "2026-09-27T16:44:10+00:00"
   },
   {
    "id": "D-009",
    "summary": "Faceless reels from raw data + coherent seeded combinatorial randomizer (no preset briefs; ≈1e18 story / ≈3e11 reel combinations)",
    "source_path": "docs/decisions.md",
-   "decided_at": "2026-09-27T16:27:54+00:00"
+   "decided_at": "2026-09-27T16:44:10+00:00"
   },
   {
    "id": "D-001",
    "summary": "Server-side encrypted keys with accounts (user choice)",
    "source_path": "docs/decisions.md",
-   "decided_at": "2026-09-27T16:27:54+00:00"
+   "decided_at": "2026-09-27T16:44:10+00:00"
   },
   {
    "id": "D-002",
    "summary": "Express + SQLite + vanilla JS",
    "source_path": "docs/decisions.md",
-   "decided_at": "2026-09-27T16:27:54+00:00"
+   "decided_at": "2026-09-27T16:44:10+00:00"
   },
   {
    "id": "D-003",
    "summary": "No automation of VideoExpress; copy/export only",
    "source_path": "docs/decisions.md",
-   "decided_at": "2026-09-27T16:27:54+00:00"
+   "decided_at": "2026-09-27T16:44:10+00:00"
   },
   {
    "id": "D-007",
    "summary": "HEADER_SESSIONS fallback for embedded preview only; keep off in production",
    "source_path": "docs/decisions.md",
-   "decided_at": "2026-09-27T16:27:54+00:00"
+   "decided_at": "2026-09-27T16:44:10+00:00"
   }
  ],
  "preferences": {
@@ -123,7 +123,32 @@
  },
  "turn_log": [
   {
-   "at": "2026-09-27T16:27:54+00:00",
+   "at": "2026-09-27T16:44:10+00:00",
+   "user_message_brief": "Analyzers and critics must know the build criteria of each entry so they never remove a baked-in feature; no humans, all AI",
+   "actions_taken": [
+    "lib/domain/buildSpec.js (spec, violations, restore, conflict filter)",
+    "meta.buildSpec frozen at generate + episode write; older entries on first polish",
+    "LOCKED BUILD CRITERIA + AI-only in reviewer/analyze/repair prompts",
+    "code guard: filter notes, restore, reject + feedback",
+    "hard check locked",
+    "demo saboteurs for tests",
+    "UI lock card, ignored notes, rejected rounds",
+    "fixed misplaced demo edit",
+    "tests",
+    "D-017, README",
+    "preview restarted",
+    "zip"
+   ],
+   "outcomes": [
+    "unit 88/88, API 17/17, E2E 124/124 (axe clean)"
+   ],
+   "new_blockers": [],
+   "unresolved": [
+    "Not yet run with a real model key"
+   ]
+  },
+  {
+   "at": "2026-09-27T16:44:10+00:00",
    "user_message_brief": "Critic section to audit scripts from lots of viewpoints (chose: feed into Polish loop, proposed 10-critic panel, projects + series)",
    "actions_taken": [
     "lib/domain/critics.js",
@@ -147,7 +172,7 @@
    ]
   },
   {
-   "at": "2026-09-27T16:27:54+00:00",
+   "at": "2026-09-27T16:44:10+00:00",
    "user_message_brief": "Button to read/evaluate scripts and loop Analyze > Repair > Analyze until each script is 95+/100, in reel projects and series, using the user API key",
    "actions_taken": [
     "lib/domain/quality.js (hard checks + rubric + score blend/cap)",
@@ -171,7 +196,7 @@
    ]
   },
   {
-   "at": "2026-09-27T16:27:54+00:00",
+   "at": "2026-09-27T16:44:10+00:00",
    "user_message_brief": "Preview + VideoExpress Create Video From Prompt paste pack (consistent characters, Narration Video); zip of updated files",
    "actions_taken": [
     "Researched VE workflow system prompts (field names/limits)",
@@ -193,7 +218,7 @@
    ]
   },
   {
-   "at": "2026-09-27T16:27:54+00:00",
+   "at": "2026-09-27T16:44:10+00:00",
    "user_message_brief": "done (admin signed up)",
    "actions_taken": [
     "Live check: healthz 200, HSTS+CSP, hasUsers true but registrationOpen true",
@@ -212,7 +237,7 @@
    ]
   },
   {
-   "at": "2026-09-27T16:27:54+00:00",
+   "at": "2026-09-27T16:44:10+00:00",
    "user_message_brief": "Coolify deploy: container unhealthy, APP_ENCRYPTION_KEY empty",
    "actions_taken": [
     "resolveEncryptionKey: env or auto key file on /data",
@@ -231,7 +256,7 @@
    ]
   },
   {
-   "at": "2026-09-27T16:27:54+00:00",
+   "at": "2026-09-27T16:44:10+00:00",
    "user_message_brief": "Update Coolify knowledge; redo the volume step",
    "actions_taken": [
     "Fetched Coolify docs (compose, storage overview, volume mounts, dockerfile)",
@@ -247,7 +272,7 @@
    ]
   },
   {
-   "at": "2026-09-27T16:27:54+00:00",
+   "at": "2026-09-27T16:44:10+00:00",
    "user_message_brief": "Make MD download/copy work for the entire series",
    "actions_taken": [
     "copyText returns real result",
@@ -266,7 +291,7 @@
    ]
   },
   {
-   "at": "2026-09-27T16:27:54+00:00",
+   "at": "2026-09-27T16:44:10+00:00",
    "user_message_brief": "Estimate cost alongside tokens; pasted OpenAI pricing chart (uses gpt-5.6-luna)",
    "actions_taken": [
     "lib/domain/pricing.js",
@@ -286,7 +311,7 @@
    ]
   },
   {
-   "at": "2026-09-27T16:27:54+00:00",
+   "at": "2026-09-27T16:44:10+00:00",
    "user_message_brief": "This app only writes scripts; VideoExpress creates images, video, sound",
    "actions_taken": [
     "guide sections → Image/Video/Sound scripts + Post text",
@@ -304,7 +329,7 @@
    ]
   },
   {
-   "at": "2026-09-27T16:27:54+00:00",
+   "at": "2026-09-27T16:44:10+00:00",
    "user_message_brief": "continue",
    "actions_taken": [
     "project id in URL hash via history.replaceState",
@@ -322,7 +347,7 @@
    ]
   },
   {
-   "at": "2026-09-27T16:27:54+00:00",
+   "at": "2026-09-27T16:44:10+00:00",
    "user_message_brief": "Wants sections that correlate to the build in the app (VideoExpress)",
    "actions_taken": [
     "ask_user skipped → interpreted as VideoExpress build-order sections",
@@ -342,7 +367,7 @@
    ]
   },
   {
-   "at": "2026-09-27T16:27:54+00:00",
+   "at": "2026-09-27T16:44:10+00:00",
    "user_message_brief": "Reels should turn a raw dump (e.g. 100 dog facts) into a whole series of episodes up to ~90 s, AI decides grouping/length; narration was being cut by word counts; add first/last frame prompts",
    "actions_taken": [
     "lib/domain/series.js + seriesPrompts.js",
@@ -365,7 +390,7 @@
    ]
   },
   {
-   "at": "2026-09-27T16:27:54+00:00",
+   "at": "2026-09-27T16:44:10+00:00",
    "user_message_brief": "Build a BYO-key LLM web app producing image/video/dialogue scripts for VideoExpress, up to 10 clips, word-count aware",
    "actions_taken": [
     "intake questions",
@@ -387,7 +412,7 @@
    ]
   },
   {
-   "at": "2026-09-27T16:27:54+00:00",
+   "at": "2026-09-27T16:44:10+00:00",
    "user_message_brief": "Sign-in works, API key saved; asked whether Coolify has persistent storage for keys",
    "actions_taken": [
     "added startup storage/mount + encryption-key canary check",
@@ -406,7 +431,7 @@
    ]
   },
   {
-   "at": "2026-09-27T16:27:54+00:00",
+   "at": "2026-09-27T16:44:10+00:00",
    "user_message_brief": "Add raw-data dump → faceless reels section; randomize for all fields that is coherent and not a small preset list",
    "actions_taken": [
     "lib/domain/randomize.js: seeded mood/niche/format-linked combinatorial generator with tag compatibility, locks, fill-blanks, per-field re-roll, vibe persistence",
@@ -425,7 +450,7 @@
    ]
   },
   {
-   "at": "2026-09-27T16:27:54+00:00",
+   "at": "2026-09-27T16:44:10+00:00",
    "user_message_brief": "Worried words get cut off at the end of clips despite word count",
    "actions_taken": [
     "speechEstimate/toSpoken/syllables/fitStatus/trimToFit in wordcount.js",
@@ -447,7 +472,7 @@
    ]
   },
   {
-   "at": "2026-09-27T16:27:54+00:00",
+   "at": "2026-09-27T16:44:10+00:00",
    "user_message_brief": "Preview said \"Please sign in\" after entering credentials",
    "actions_taken": [
     "reproduced with cross-site iframe + blocked cookies",
@@ -465,7 +490,7 @@
    ]
   },
   {
-   "at": "2026-09-27T16:27:54+00:00",
+   "at": "2026-09-27T16:44:10+00:00",
    "user_message_brief": "Corrected Coolify host: coolify.delquro.com (not delqurolabs)",
    "actions_taken": [
     "replaced host in README, charter, records"
@@ -484,7 +509,7 @@
    "id": "O-1",
    "kind": "open_item",
    "summary": "Coolify host mismatch (delqurolabs vs delquro)",
-   "resolved_at": "2026-09-27T16:27:54+00:00",
+   "resolved_at": "2026-09-27T16:44:10+00:00",
    "resolution": "User confirmed coolify.delquro.com, matching the spec"
   }
  ]

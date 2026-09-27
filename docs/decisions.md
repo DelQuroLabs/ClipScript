@@ -109,3 +109,30 @@
   - A critic summary line in Script quality.
   - Series: per-critic averages across episodes.
 - **Evidence:** unit 83/83 (critics 5), API 16/16 (critic assertions added), E2E 121/121 (6 new steps, axe clean).
+
+## D-017 · Locked build criteria for analyzers, critics and repairs (100% AI, no human review)
+- **Ask:** "make sure our analyzers and critics know what the build criteria was for the entry so they do not accidentally remove a feature that was baked in. No humans here. It is all AI driven."
+- **What is locked** (`lib/domain/buildSpec.js`, `buildSpec(brief, script, ctx)`): built from the brief, the generation settings, the series plan, and the features the generated script actually has. A feature the entry never had is never enforced.
+  - **Always:** AI-only production, format (fixed clip count × length, or narrated layout), aspect ratio.
+  - **When set in the brief:** language, faceless, audio mode + narrator voice + speakers, characters, character notes, visual style, tone, audience, reel structure, vibe.
+  - **Content:** at least 80% of the spoken words (no gutting).
+  - **When present in the script:** on-screen text, first+last frames, chained frames, sound cues, caption, hashtags, CTA.
+  - **For series episodes:** hook, series outro, episode format/length, series membership.
+- **When it is frozen:** at generation (`/api/generate`, series `writeEpisode`) into `meta.buildSpec`. Older entries get it on their first polish (from the series plan when there is one). Polishing never changes it.
+- **Told to the AI:**
+  - The reviewer system prompt says there are no humans (VideoExpress renders everything) and that a locked feature is never a flaw.
+  - Analyze and Repair both carry a "LOCKED BUILD CRITERIA" block. Every critic is told to respect it.
+  - A rejected repair's violations are fed back into the next repair ("YOUR LAST REPAIR WAS REJECTED…").
+- **Enforced in code** (no human in the loop):
+  1. Notes that would undo a locked feature, or need a human (hire, film, record, manual edit, human review), are dropped before the repairer sees them. They are shown as "ignored".
+  2. After each repair, `restoreFeatures` copies back anything dropped (on-screen text, last frames, sound cues, chain, characters, style, caption, hashtags), taken only from the previous version.
+  3. `specViolations` then decides: any feature still broken means the repair is **rejected** and the best version is kept.
+  4. The hard check "Keeps every locked build feature" also caps the score.
+- **UI:**
+  - Critic panel: "🔒 Locked build criteria" list, plus "N notes ignored" with the feature that blocked each.
+  - Quality card: a lock line.
+  - Score history shows rejected rounds.
+- **Evidence:**
+  - Unit 88/88 (buildSpec 5).
+  - API 17/17. The new test covers: frozen at generation; conflicting notes filtered; demo saboteur that deletes on-screen text is restored; saboteur that guts the narration is rejected, then the next round is accepted.
+  - E2E 124/124 (3 new, axe clean).

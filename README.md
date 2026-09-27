@@ -130,3 +130,6 @@ Every time a script is scored or polished, 10 critics audit it from their own vi
 - accessibility
 
 Their notes go straight into the Repair step, and their average is 20% of the score. Any critic below 6/10 blocks 95+. Open the **Critic panel** tab to see each verdict and to switch critics on or off. On a series page you see each critic's average across episodes.
+
+## Locked build criteria
+Every entry remembers what it was built with: clip format, audio mode and voice, faceless rules, characters, style, on-screen text, first/last frames, sound cues, CTA, and the series hook and outro. The analyzer, every critic and the repairer are told these are locked and that production is 100% AI. The code also checks every repair: anything dropped is put back, a repair that still breaks a feature is rejected, and notes that would undo a feature or need a human are ignored. See **Critic panel → 🔒 Locked build criteria**.
